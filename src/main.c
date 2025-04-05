@@ -84,7 +84,7 @@ XImage *XGetRGBImage(Display *display, Window window, int x, int y, unsigned int
     return image;
 }
 
-int MySetTexture(const XImage *image, const XWindowAttributes *attr, Texture *texture) {
+int MySetTexture(const XImage *image, Texture *texture) {
     if (image == NULL) {
         fprintf(stderr, "Unable to get image\n");
         return 1;
@@ -93,18 +93,18 @@ int MySetTexture(const XImage *image, const XWindowAttributes *attr, Texture *te
     // Convert rearranged data to Image
     Image rlImg = {
         .data = image->data,
-        .width = attr->width,
-        .height = attr->height,
+        .width = image->width,
+        .height = image->height,
         .mipmaps = 1,
         .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, // Raylib does not have a B8R8G8 format
     };
 
     Texture newTexture = LoadTextureFromImage(rlImg);
-    SetTextureFilter(newTexture, TEXTURE_FILTER_BILINEAR);
     if (newTexture.id == 0) {
         fprintf(stderr, "Unable to load texture\n");
         return 1;
     }
+    SetTextureFilter(newTexture, TEXTURE_FILTER_BILINEAR);
     UnloadImage(rlImg); // Properly unload the image to avoid memory leaks
 
     UnloadTexture(*texture); // Unload the old texture
@@ -112,13 +112,13 @@ int MySetTexture(const XImage *image, const XWindowAttributes *attr, Texture *te
     *texture = newTexture; // Assign the new texture to the model's material
 }
 
-int MyUpdateTexture(const XImage *image, const XWindowAttributes *attr, Texture *texture) {
+int MyUpdateTexture(const XImage *image, Texture *texture) {
     if (image == NULL) {
         fprintf(stderr, "Unable to get image\n");
         return 1;
     }
 
-    UpdateTexture(*texture, image->data); // Update the texture with the rearranged data
+    UpdateTexture(*texture, image->data);
 }
 
 typedef enum ControlMode {
@@ -128,6 +128,16 @@ typedef enum ControlMode {
 } ControlMode;
 
 ControlMode mode = CursorMovement;
+
+typedef struct MyWindow {
+    Window window;
+    XWindowAttributes *attr;
+    Model *model;
+    Texture *texture;
+    float originalScale;
+    float scale;
+    struct MyWindow *next;
+} MyWindow;
 
 int main(void) {
     // Tell the window to use vsync and work on high DPI displays
@@ -146,40 +156,62 @@ int main(void) {
 
     SetTargetFPS(60);
 
-    Window window = 0x1e0002c;
-
     Display *display = XOpenDisplay(NULL);
     if (display == NULL) {
         fprintf(stderr, "Unable to open X display\n");
         return 1;
     }
 
-    XWindowAttributes attr;
-    if (XGetWindowAttributes(display, window, &attr) == 0) {
-        fprintf(stderr, "Unable to get window attributes\n");
-        XCloseDisplay(display);
-        return 1;
+    MyWindow windows[2] = {0};
+    windows[0].window = 0x1e0002c;
+    windows[1].window = 0x2a00003;
+
+    for (int i = 0; i < 2; i++) {
+        MyWindow w = windows[i];
+        w.attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
+        if (XGetWindowAttributes(display, w.window, w.attr) == 0) {
+            fprintf(stderr, "Unable to get window attributes\n");
+            XCloseDisplay(display);
+            return 1;
+        }
+
+        // Create a simple plane mesh
+        Mesh plane = GenMeshPlane(w.attr->width / 350.0f, w.attr->height / 350.0f, 1, 1); // Width, length, resX, resZ
+        // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
+
+        w.model = (Model *)malloc(sizeof(Model));
+        *w.model = LoadModelFromMesh(plane);
+
+        // Set the model's material to use the texture
+        w.texture = (Texture *)malloc(sizeof(Texture));
+
+        XImage *image = XGetRGBImage(display, w.window, 0, 0, w.attr->width, w.attr->height);
+        MySetTexture(image, w.texture);
+        w.model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *w.texture;
+        // XDestroyImage(image);
+
+        // printf("Window %d texture id: %d\n", i, w.texture->id);
+
+        w.scale = 1;
+        w.originalScale = 1;
+
+        windows[i] = w;
     }
 
-    // Create a simple plane mesh
-    Mesh plane = GenMeshPlane(5.0f, 3.0f, 1, 1); // Width, length, resX, resZ
-    // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
-    Model model = LoadModelFromMesh(plane);
+    windows[0].next = &windows[1];
+    windows[1].next = &windows[0];
 
-    Texture texture = model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture;
-
-    XImage *image = XGetRGBImage(display, window, 0, 0, attr.width, attr.height);
-    MySetTexture(image, &attr, &texture);
-    // XDestroyImage(image);
-
-    float windowScale = 1.0f;
-    float originalWindowScale = windowScale;
+    MyWindow *selected_window = &windows[0];
 
     // disable the escape key
     SetExitKey(-1);
 
     // game loop
     while (!WindowShouldClose()) {
+        if (IsKeyPressed(KEY_N)) {
+            selected_window = selected_window->next;
+        }
+
         if (mode == CameraMovement) {
             MyUpdateCamera(&camera);
             if (IsKeyPressed(KEY_SPACE)) {
@@ -194,7 +226,7 @@ int main(void) {
             }
             else if (IsKeyPressed(KEY_S)) {
                 mode = ScaleObject;
-                originalWindowScale = windowScale;
+                selected_window->originalScale = selected_window->scale;
             }
         }
         else if (mode == ScaleObject) {
@@ -203,7 +235,7 @@ int main(void) {
             }
             else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
                 mode = CursorMovement;
-                windowScale = originalWindowScale;
+                selected_window->scale = selected_window->originalScale;
             }
             else {
                 //TODO: maybe scale based on mouse velocity instead
@@ -221,13 +253,13 @@ int main(void) {
                 scale *= 5*scale; // scale quadratically
                 if (scale < 0.03f) scale = 0.03f; // minimum scale
                 if (scale > 10.0f) scale = 10.0f; // maximum scale
-                windowScale = scale;
-                printf("Scale: %f\n", windowScale);
+                selected_window->scale = scale;
+                printf("Scale: %f\n", selected_window->scale);
             }
         }
 
-        image = XGetRGBImage(display, window, 0, 0, attr.width, attr.height);
-        MyUpdateTexture(image, &attr, &texture);
+        XImage *image = XGetRGBImage(display, selected_window->window, 0, 0, selected_window->attr->width, selected_window->attr->height);
+        MyUpdateTexture(image, selected_window->texture);
         XDestroyImage(image);
 
         BeginDrawing();
@@ -243,7 +275,7 @@ int main(void) {
         rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
 
         Vector3 modelPosition = {0, 3.25f, -1};
-        DrawModel(model, modelPosition, windowScale, WHITE);
+        DrawModel(*selected_window->model, modelPosition, selected_window->scale, WHITE);
 
         rlPopMatrix();
 
@@ -268,7 +300,11 @@ int main(void) {
     }
 
     // cleanup
-    UnloadModel(model);
+    for (int i = 0; i < 2; i++) {
+        MyWindow w = windows[i];
+        UnloadModel(*w.model);
+        XFree(w.attr);
+    }
     XCloseDisplay(display);
     CloseWindow();
     return 0;
