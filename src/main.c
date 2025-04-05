@@ -14,8 +14,29 @@
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
+#define WIN_COUNT 2
 
 const Vector3 ORIGIN = {0.0f, 0.0f, 0.0f};
+
+typedef enum ControlMode {
+    CameraMovement,
+    CursorMovement,
+    ScaleObject,
+} ControlMode;
+
+ControlMode mode = CursorMovement;
+
+typedef struct MyWindow {
+    Window window;
+    XWindowAttributes *attr;
+    Model *model;
+    Texture *texture;
+    float originalScale;
+    float scale;
+    Vector3 position;
+    Vector3 rotation;
+    float rotationAngle;
+} MyWindow;
 
 void MyUpdateCamera(Camera *camera) {
 #define CAMERA_MOUSE_MOVE_SENSITIVITY 0.005f
@@ -121,23 +142,56 @@ int MyUpdateTexture(const XImage *image, Texture *texture) {
     UpdateTexture(*texture, image->data);
 }
 
-typedef enum ControlMode {
-    CameraMovement,
-    CursorMovement,
-    ScaleObject,
-} ControlMode;
+BoundingBox GetWindowBoundingBox(MyWindow *w) {
+    // Since we know there's only one mesh (plane), we can simplify
+    Mesh mesh = w->model->meshes[0];
+    int vertexCount = mesh.vertexCount;
 
-ControlMode mode = CursorMovement;
+    // Initialize with first vertex instead of arbitrary large value
+    Vector3 firstVertex = {
+        mesh.vertices[0],      // x
+        mesh.vertices[1],      // y
+        mesh.vertices[2]       // z
+    };
+    BoundingBox bbox = {
+        .min = firstVertex,
+        .max = firstVertex
+    };
 
-typedef struct MyWindow {
-    Window window;
-    XWindowAttributes *attr;
-    Model *model;
-    Texture *texture;
-    float originalScale;
-    float scale;
-    struct MyWindow *next;
-} MyWindow;
+    // Start from second vertex (i=1) since we used first for initialization
+    // Unroll the vertex access to reduce multiplications
+    float *vertices = mesh.vertices;
+    for (int i = 1; i < vertexCount; i++) {
+        int base = i * 3;
+        float x = vertices[base];
+        float y = vertices[base + 1];
+        float z = vertices[base + 2];
+
+        // Use compound assignment to potentially improve branch prediction
+        bbox.min.x = (x < bbox.min.x) ? x : bbox.min.x;
+        bbox.min.y = (y < bbox.min.y) ? y : bbox.min.y;
+        bbox.min.z = (z < bbox.min.z) ? z : bbox.min.z;
+
+        bbox.max.x = (x > bbox.max.x) ? x : bbox.max.x;
+        bbox.max.y = (y > bbox.max.y) ? y : bbox.max.y;
+        bbox.max.z = (z > bbox.max.z) ? z : bbox.max.z;
+    }
+
+    // Transform with pre-computed values
+    Vector3 position = w->position;
+    float scale = w->scale;  // Single scale value since it's uniform
+
+    // Inline the transformation to avoid function calls
+    bbox.min.x = bbox.min.x * scale + position.x;
+    bbox.min.y = bbox.min.y * scale + position.y;
+    bbox.min.z = bbox.min.z * scale + position.z;
+
+    bbox.max.x = bbox.max.x * scale + position.x;
+    bbox.max.y = bbox.max.y * scale + position.y;
+    bbox.max.z = bbox.max.z * scale + position.z;
+
+    return bbox;
+}
 
 int main(void) {
     // Tell the window to use vsync and work on high DPI displays
@@ -162,11 +216,17 @@ int main(void) {
         return 1;
     }
 
-    MyWindow windows[2] = {0};
+    MyWindow windows[WIN_COUNT] = {0};
     windows[0].window = 0x1e0002c;
+    windows[0].position = (Vector3){0, 3.25f, -1};
+    windows[0].rotation = (Vector3){1, 0, 0};
+    windows[0].rotationAngle = 90;
     windows[1].window = 0x2a00003;
+    windows[1].position = (Vector3){2, 2.25f, -0.8};;
+    windows[1].rotation = (Vector3){1, 0, 0};
+    windows[1].rotationAngle = 90;
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < WIN_COUNT; i++) {
         MyWindow w = windows[i];
         w.attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
         if (XGetWindowAttributes(display, w.window, w.attr) == 0) {
@@ -198,20 +258,16 @@ int main(void) {
         windows[i] = w;
     }
 
-    windows[0].next = &windows[1];
-    windows[1].next = &windows[0];
-
     MyWindow *selected_window = &windows[0];
 
     // disable the escape key
     SetExitKey(-1);
 
+    Ray ray = {0};
+    RayCollision collision = { 0 };
+
     // game loop
     while (!WindowShouldClose()) {
-        if (IsKeyPressed(KEY_N)) {
-            selected_window = selected_window->next;
-        }
-
         if (mode == CameraMovement) {
             MyUpdateCamera(&camera);
             if (IsKeyPressed(KEY_SPACE)) {
@@ -224,9 +280,30 @@ int main(void) {
                 mode = CameraMovement;
                 DisableCursor();
             }
-            else if (IsKeyPressed(KEY_S)) {
+            else if (selected_window != NULL && IsKeyPressed(KEY_S)) {
                 mode = ScaleObject;
                 selected_window->originalScale = selected_window->scale;
+            }
+            else {//if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                // rlPushMatrix();
+                // rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+                ray = GetScreenToWorldRay(GetMousePosition(), camera);
+
+                // Check collision between ray and box
+                for (int i = 0; i < WIN_COUNT; i++) {
+                    MyWindow w = windows[i];
+                    // printf("Window %d: %d\n", i, w.window);
+                    // printf("Window %d: %d\n", i, collision.hit);
+
+                    // get the bounding box of the plane
+                    collision = GetRayCollisionBox(ray, GetWindowBoundingBox(&w));
+                    if (collision.hit) {
+                        selected_window = &windows[i];
+                        printf("Selected window: %d\n", i);
+                        break;
+                    }
+                }
+                // rlPopMatrix();
             }
         }
         else if (mode == ScaleObject) {
@@ -258,9 +335,12 @@ int main(void) {
             }
         }
 
-        XImage *image = XGetRGBImage(display, selected_window->window, 0, 0, selected_window->attr->width, selected_window->attr->height);
-        MyUpdateTexture(image, selected_window->texture);
-        XDestroyImage(image);
+        if (selected_window != NULL) {
+            MyWindow w = *selected_window;
+            XImage *image = XGetRGBImage(display, w.window, 0, 0, w.attr->width, w.attr->height);
+            MyUpdateTexture(image, w.texture);
+            XDestroyImage(image);
+        }
 
         BeginDrawing();
 
@@ -270,14 +350,37 @@ int main(void) {
 
         DrawGrid(10, 1.0f);
 
-        rlPushMatrix();
+        // draw collision box
+        if (collision.hit) {
+            DrawCube(collision.point, 0.1f, 0.1f, 0.1f, RED);
+        }
+        DrawRay(ray, GREEN);
+        for (int i = 0; i < WIN_COUNT; i++) {
+            MyWindow w = windows[i];
 
-        rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+            BoundingBox bbox = GetWindowBoundingBox(&w);
+            DrawBoundingBox(bbox, BLUE);
+        }
 
-        Vector3 modelPosition = {0, 3.25f, -1};
-        DrawModel(*selected_window->model, modelPosition, selected_window->scale, WHITE);
+        // rlPushMatrix();
+        // rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
 
-        rlPopMatrix();
+        for (int i = 0; i < WIN_COUNT; i++) {
+            MyWindow w = windows[i];
+            DrawModel(*w.model, w.position, w.scale, WHITE);
+            // DrawModelWires(*w.model, w.position, w.scale, BLACK);
+            // DrawModelEx(*w.model, w.position, w.rotation, 90.0f, (Vector3){w.scale, w.scale, 1.0f}, WHITE);
+
+            Color color = selected_window != NULL && selected_window->window == w.window ? RED : BLACK;
+
+            float width = w.attr->width * w.scale / 350;
+            float height = w.attr->height * w.scale / 350;
+            DrawCubeWires(w.position,
+                width, 0,
+                height, color);
+        }
+
+        // rlPopMatrix();
 
         EndMode3D();
 
@@ -300,7 +403,7 @@ int main(void) {
     }
 
     // cleanup
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < WIN_COUNT; i++) {
         MyWindow w = windows[i];
         UnloadModel(*w.model);
         XFree(w.attr);
