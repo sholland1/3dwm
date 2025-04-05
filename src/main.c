@@ -6,9 +6,14 @@
 #undef Font
 #define Font XFont
 #include "rcamera.h"
+#include "raymath.h"
+#include "rlgl.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+
+#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 600
 
 const Vector3 ORIGIN = {0.0f, 0.0f, 0.0f};
 
@@ -116,27 +121,30 @@ int MyUpdateTexture(const XImage *image, const XWindowAttributes *attr, Texture 
     UpdateTexture(*texture, image->data); // Update the texture with the rearranged data
 }
 
+typedef enum ControlMode {
+    CameraMovement,
+    CursorMovement,
+    ScaleObject,
+} ControlMode;
+
+ControlMode mode = CursorMovement;
+
 int main(void) {
     // Tell the window to use vsync and work on high DPI displays
     SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
 
     // Create the window and OpenGL context
-    InitWindow(800, 600, "3dwm");
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "3dwm");
 
     Camera3D camera = {0};
     camera.up = (Vector3){0.0f, 1.0f, 0.0f}; // Camera up vector (rotation towards target)
     camera.fovy = 45.0f;                     // Camera field-of-view Y
     camera.projection = CAMERA_PERSPECTIVE;  // Camera projection type
 
-    camera.position = (Vector3){0, 2, -8};
-    camera.target = (Vector3){0, 0, 3};
+    camera.position = (Vector3){0, 2, 8};
+    camera.target = (Vector3){0, 0, -3};
 
-    // // Move mouse to the center of the screen
-    Vector2 screenCenter = {GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f};
-    SetMousePosition(screenCenter.x, screenCenter.y);
-    DisableCursor(); // Limit cursor to relative movement inside the window
-
-    SetTargetFPS(60); // Set our game to run at 60 frames-per-second
+    SetTargetFPS(60);
 
     Window window = 0x1e0002c;
 
@@ -154,7 +162,7 @@ int main(void) {
     }
 
     // Create a simple plane mesh
-    Mesh plane = GenMeshPlane(4.0f, 3.0f, 1, 1); // Width, length, resX, resZ
+    Mesh plane = GenMeshPlane(5.0f, 3.0f, 1, 1); // Width, length, resX, resZ
     // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
     Model model = LoadModelFromMesh(plane);
 
@@ -164,41 +172,96 @@ int main(void) {
     MySetTexture(image, &attr, &texture);
     // XDestroyImage(image);
 
-    // game loop
-    while (!WindowShouldClose()) {       // run the loop untill the user presses ESCAPE or presses the Close button on the window
-        if (IsKeyPressed(KEY_CAPS_LOCK)) // Checking for Escape because I have it remapped
-            break;
+    float windowScale = 1.0f;
+    float originalWindowScale = windowScale;
 
-        MyUpdateCamera(&camera);
+    // disable the escape key
+    SetExitKey(-1);
+
+    // game loop
+    while (!WindowShouldClose()) {
+        if (mode == CameraMovement) {
+            MyUpdateCamera(&camera);
+            if (IsKeyPressed(KEY_SPACE)) {
+                mode = CursorMovement;
+                EnableCursor();
+            }
+        }
+        else if (mode == CursorMovement) {
+            if (IsKeyPressed(KEY_SPACE)) {
+                mode = CameraMovement;
+                DisableCursor();
+            }
+            else if (IsKeyPressed(KEY_S)) {
+                mode = ScaleObject;
+                originalWindowScale = windowScale;
+            }
+        }
+        else if (mode == ScaleObject) {
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                mode = CursorMovement;
+            }
+            else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
+                mode = CursorMovement;
+                windowScale = originalWindowScale;
+            }
+            else {
+                //TODO: maybe scale based on mouse velocity instead
+                //      maybe wrap around the screen
+
+                // scale based on mouse position distance from the center of the screen
+                // the closer to the center, the smaller the scale
+                // the further from the center, the larger the scale
+                // should scale quadratically
+
+                Vector2 mousePosition = GetMousePosition();
+                Vector2 screenCenter = {GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f};
+                Vector2 mouseDelta = {mousePosition.x - screenCenter.x, mousePosition.y - screenCenter.y};
+                float scale = Vector2Length(mouseDelta) / (GetScreenWidth() / 2.0f);
+                scale *= 5*scale; // scale quadratically
+                if (scale < 0.03f) scale = 0.03f; // minimum scale
+                if (scale > 10.0f) scale = 10.0f; // maximum scale
+                windowScale = scale;
+                printf("Scale: %f\n", windowScale);
+            }
+        }
 
         image = XGetRGBImage(display, window, 0, 0, attr.width, attr.height);
         MyUpdateTexture(image, &attr, &texture);
         XDestroyImage(image);
 
-        // drawing
         BeginDrawing();
 
-        // Setup the back buffer for drawing (clear color and depth buffers)
         ClearBackground(RAYWHITE);
 
         BeginMode3D(camera);
 
         DrawGrid(10, 1.0f);
 
-        DrawModel(model, (Vector3){0, 0.25f, 0}, 1.0f, WHITE);
-        // DrawModelEx(model, (Vector3){0, 0.25f, 0}, (Vector3){0, 1, 0}, 0.0f, (Vector3){1.0f, 1.0f, 1.0f}, Fade(WHITE, 0.5f));
+        rlPushMatrix();
+
+        rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
+
+        Vector3 modelPosition = {0, 3.25f, -1};
+        DrawModel(model, modelPosition, windowScale, WHITE);
+
+        rlPopMatrix();
 
         EndMode3D();
 
         // display frame rate on screen
-        DrawFPS(10, 10);
-
+        int screenWidth = GetScreenWidth();
+        DrawFPS(screenWidth - 80, 10);
 
         DrawRectangle(10, 10, 200, 50, Fade(SKYBLUE, 0.5f));
         DrawRectangleLines(10, 10, 200, 50, BLUE);
 
-        DrawText("- Press [Space] to begin", 40, 20, 10, DARKGRAY);
-        DrawText("- Press [Escape] to exit", 40, 40, 10, DARKGRAY);
+        char *modeText = mode == CameraMovement ? "Camera Movement" : mode == CursorMovement ? "Cursor Movement" : "Scale Object";
+        Color modeColor = mode == CameraMovement ? BLUE : mode == CursorMovement ? GREEN : RED;
+
+        DrawText(TextFormat("Mode: %s", modeText), 2, 0, 10, modeColor);
+        DrawText("- Press [Space] to change modes", 20, 20, 10, DARKGRAY);
+        DrawText("- Press [Escape] to exit", 20, 40, 10, DARKGRAY);
 
         // end the frame and get ready for the next one  (display frame, poll input, etc...)
         EndDrawing();
