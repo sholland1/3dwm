@@ -21,10 +21,32 @@ const Vector3 ORIGIN = {0.0f, 0.0f, 0.0f};
 typedef enum ControlMode {
     CameraMovement,
     CursorMovement,
-    ScaleObject,
+    ScaleWindow,
+    MoveWindowZ,
+    MoveWindowXY,
 } ControlMode;
 
-ControlMode mode = CursorMovement;
+Color GetModeColor(ControlMode m) {
+    switch (m) {
+        case CameraMovement: return BLUE;
+        case CursorMovement: return GREEN;
+        case ScaleWindow:
+        case MoveWindowZ:
+        case MoveWindowXY: return RED;
+        default: return BLACK;
+    }
+}
+
+const char *GetModeText(ControlMode m) {
+    switch (m) {
+        case CameraMovement: return "Camera Movement";
+        case CursorMovement: return "Cursor Movement";
+        case ScaleWindow: return "Scale Window";
+        case MoveWindowZ:
+        case MoveWindowXY: return "Move Window";
+        default: return "Unknown Mode";
+    }
+}
 
 typedef struct MyWindow {
     Window window;
@@ -33,9 +55,8 @@ typedef struct MyWindow {
     Texture *texture;
     float originalScale;
     float scale;
+    Vector3 originalPosition;
     Vector3 position;
-    Vector3 rotation;
-    float rotationAngle;
 } MyWindow;
 
 void MyUpdateCamera(Camera *camera) {
@@ -143,54 +164,76 @@ int MyUpdateTexture(const XImage *image, Texture *texture) {
 }
 
 BoundingBox GetWindowBoundingBox(MyWindow *w) {
-    // Since we know there's only one mesh (plane), we can simplify
     Mesh mesh = w->model->meshes[0];
     int vertexCount = mesh.vertexCount;
-
-    // Initialize with first vertex instead of arbitrary large value
-    Vector3 firstVertex = {
-        mesh.vertices[0],      // x
-        mesh.vertices[1],      // y
-        mesh.vertices[2]       // z
-    };
-    BoundingBox bbox = {
-        .min = firstVertex,
-        .max = firstVertex
-    };
-
-    // Start from second vertex (i=1) since we used first for initialization
-    // Unroll the vertex access to reduce multiplications
     float *vertices = mesh.vertices;
+    Matrix transform = w->model->transform;  // Assuming transform is a 4x4 matrix
+
+    // Transform first vertex to initialize bbox
+    Vector3 firstVertex = {
+        vertices[0],  // x
+        vertices[1],  // y
+        vertices[2]   // z
+    };
+    Vector3 firstTransformed = Vector3Transform(firstVertex, transform);
+    BoundingBox bbox = {
+        .min = firstTransformed,
+        .max = firstTransformed
+    };
+
+    // Process remaining vertices
     for (int i = 1; i < vertexCount; i++) {
         int base = i * 3;
-        float x = vertices[base];
-        float y = vertices[base + 1];
-        float z = vertices[base + 2];
+        Vector3 vertex = {
+            vertices[base],
+            vertices[base + 1],
+            vertices[base + 2]
+        };
 
-        // Use compound assignment to potentially improve branch prediction
-        bbox.min.x = (x < bbox.min.x) ? x : bbox.min.x;
-        bbox.min.y = (y < bbox.min.y) ? y : bbox.min.y;
-        bbox.min.z = (z < bbox.min.z) ? z : bbox.min.z;
+        // Transform vertex by the model's transform matrix
+        Vector3 transformed = Vector3Transform(vertex, transform);
 
-        bbox.max.x = (x > bbox.max.x) ? x : bbox.max.x;
-        bbox.max.y = (y > bbox.max.y) ? y : bbox.max.y;
-        bbox.max.z = (z > bbox.max.z) ? z : bbox.max.z;
+        // Update bounds
+        bbox.min.x = (transformed.x < bbox.min.x) ? transformed.x : bbox.min.x;
+        bbox.min.y = (transformed.y < bbox.min.y) ? transformed.y : bbox.min.y;
+        bbox.min.z = (transformed.z < bbox.min.z) ? transformed.z : bbox.min.z;
+
+        bbox.max.x = (transformed.x > bbox.max.x) ? transformed.x : bbox.max.x;
+        bbox.max.y = (transformed.y > bbox.max.y) ? transformed.y : bbox.max.y;
+        bbox.max.z = (transformed.z > bbox.max.z) ? transformed.z : bbox.max.z;
     }
 
-    // Transform with pre-computed values
+    // Apply window position (assuming it's an additional offset)
     Vector3 position = w->position;
-    float scale = w->scale;  // Single scale value since it's uniform
-
-    // Inline the transformation to avoid function calls
-    bbox.min.x = bbox.min.x * scale + position.x;
-    bbox.min.y = bbox.min.y * scale + position.y;
-    bbox.min.z = bbox.min.z * scale + position.z;
-
-    bbox.max.x = bbox.max.x * scale + position.x;
-    bbox.max.y = bbox.max.y * scale + position.y;
-    bbox.max.z = bbox.max.z * scale + position.z;
+    bbox.min.x += position.x;
+    bbox.min.y += position.y;
+    bbox.min.z += position.z;
+    bbox.max.x += position.x;
+    bbox.max.y += position.y;
+    bbox.max.z += position.z;
 
     return bbox;
+}
+
+void DrawWindowBorder(MyWindow *w, Color color) {
+    //TODO: maybe use a shader for this
+    float *vertices = w->model->meshes[0].vertices;
+    Matrix transform = w->model->transform;
+
+    Vector3 v1 = Vector3Transform((Vector3){vertices[0], vertices[1], vertices[2]}, transform);
+    Vector3 v2 = Vector3Transform((Vector3){vertices[3], vertices[4], vertices[5]}, transform);
+    Vector3 v3 = Vector3Transform((Vector3){vertices[6], vertices[7], vertices[8]}, transform);
+    Vector3 v4 = Vector3Transform((Vector3){vertices[9], vertices[10], vertices[11]}, transform);
+
+    v1 = Vector3Add(v1, w->position);
+    v2 = Vector3Add(v2, w->position);
+    v3 = Vector3Add(v3, w->position);
+    v4 = Vector3Add(v4, w->position);
+
+    DrawLine3D(v1, v2, color);
+    DrawLine3D(v2, v4, color);
+    DrawLine3D(v4, v3, color);
+    DrawLine3D(v3, v1, color);
 }
 
 int main(void) {
@@ -219,12 +262,12 @@ int main(void) {
     MyWindow windows[WIN_COUNT] = {0};
     windows[0].window = 0x1e0002c;
     windows[0].position = (Vector3){0, 3.25f, -1};
-    windows[0].rotation = (Vector3){1, 0, 0};
-    windows[0].rotationAngle = 90;
+    // windows[0].rotation = (Vector3){1, 0, 0};
+    // windows[0].rotationAngle = 90;
     windows[1].window = 0x2a00003;
-    windows[1].position = (Vector3){2, 2.25f, -0.8};;
-    windows[1].rotation = (Vector3){1, 0, 0};
-    windows[1].rotationAngle = 90;
+    windows[1].position = (Vector3){2, 2.25f, -0.8};
+    // windows[1].rotation = (Vector3){1, 0, 0};
+    // windows[1].rotationAngle = 90;
 
     for (int i = 0; i < WIN_COUNT; i++) {
         MyWindow w = windows[i];
@@ -259,18 +302,31 @@ int main(void) {
     }
 
     MyWindow *selected_window = &windows[0];
+    ControlMode mode = CursorMovement;
 
     // disable the escape key
     SetExitKey(-1);
 
     Ray ray = {0};
     RayCollision collision = { 0 };
+    Vector2 originalMousePosition = {0};
+
+    float rotationAngle = 0.0f;
 
     // game loop
     while (!WindowShouldClose()) {
+        if (IsKeyDown(KEY_TAB)) {
+            for (int i = 0; i < WIN_COUNT; i++) {
+                MyWindow w = windows[i];
+
+                rotationAngle += 0.01f;
+                w.model->transform = MatrixRotateXYZ((Vector3){rotationAngle, 0, 0});
+            }
+        }
+
         if (mode == CameraMovement) {
             MyUpdateCamera(&camera);
-            if (IsKeyPressed(KEY_SPACE)) {
+            if (IsKeyPressed(KEY_Q) || IsKeyPressed(KEY_SPACE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 mode = CursorMovement;
                 EnableCursor();
             }
@@ -281,14 +337,28 @@ int main(void) {
                 DisableCursor();
             }
             else if (selected_window != NULL && IsKeyPressed(KEY_S)) {
-                mode = ScaleObject;
+                mode = ScaleWindow;
                 selected_window->originalScale = selected_window->scale;
             }
+            else if (selected_window != NULL && IsKeyPressed(KEY_Z)) {
+                mode = MoveWindowZ;
+                selected_window->originalPosition = selected_window->position;
+                camera.target = selected_window->position;
+                originalMousePosition = GetMousePosition();
+            }
+            else if (selected_window != NULL && IsKeyPressed(KEY_G)) {
+                mode = MoveWindowXY;
+                selected_window->originalPosition = selected_window->position;
+                // camera.target.x = selected_window->position.x;
+                // camera.target.z = selected_window->position.z;
+                originalMousePosition = GetMousePosition();
+            }
             else {//if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                // rlPushMatrix();
-                // rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
                 ray = GetScreenToWorldRay(GetMousePosition(), camera);
 
+                collision.distance = 1000000.0f;
+                collision.hit = false;
+                RayCollision tempCollision = {0};
                 // Check collision between ray and box
                 for (int i = 0; i < WIN_COUNT; i++) {
                     MyWindow w = windows[i];
@@ -296,17 +366,18 @@ int main(void) {
                     // printf("Window %d: %d\n", i, collision.hit);
 
                     // get the bounding box of the plane
-                    collision = GetRayCollisionBox(ray, GetWindowBoundingBox(&w));
-                    if (collision.hit) {
+                    tempCollision = GetRayCollisionBox(ray, GetWindowBoundingBox(&w));
+                    if (tempCollision.hit && tempCollision.distance <= collision.distance) {
+                        collision = tempCollision;
                         selected_window = &windows[i];
-                        printf("Selected window: %d\n", i);
-                        break;
                     }
                 }
-                // rlPopMatrix();
+                // if (collision.hit) {
+                //     printf("Selected window: %d\n", i);
+                // }
             }
         }
-        else if (mode == ScaleObject) {
+        else if (mode == ScaleWindow) {
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 mode = CursorMovement;
             }
@@ -332,6 +403,53 @@ int main(void) {
                 if (scale > 10.0f) scale = 10.0f; // maximum scale
                 selected_window->scale = scale;
                 printf("Scale: %f\n", selected_window->scale);
+            }
+        }
+        else if (mode == MoveWindowZ) {
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                mode = CursorMovement;
+            }
+            else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
+                mode = CursorMovement;
+                selected_window->position = selected_window->originalPosition;
+            }
+            else {
+                // move window toward the camera when mouse is above center
+                // move window away from the camera when mouse is below center
+
+                Vector3 moveDirection = Vector3Subtract(selected_window->originalPosition, camera.position);
+                float scalar = (originalMousePosition.y - GetMouseY()) / 60.0f;
+                selected_window->position = Vector3Add(
+                    Vector3Scale(moveDirection, scalar),
+                    selected_window->originalPosition);
+            }
+        }
+        else if (mode == MoveWindowXY) {
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                mode = CursorMovement;
+            }
+            else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
+                mode = CursorMovement;
+                selected_window->position = selected_window->originalPosition;
+                camera.target = selected_window->position;
+            }
+            else {
+                // TODO: window should orbit the camera at constant distance
+                Vector2 mousePosition = GetMousePosition();
+                Vector3 directionOfWindow = Vector3Subtract(selected_window->originalPosition, camera.position);
+
+                // Vector3 normalizedMoveDirection = Vector2
+                Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, (Vector3){0, 1, 0}, (originalMousePosition.x - mousePosition.x) / 100.0f);
+                Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX , (Vector3){1, 0, 0}, (originalMousePosition.y - mousePosition.y) / 100.0f);
+
+                selected_window->position = Vector3Add(camera.position, moveDirection);
+
+                // Vector3 windowToCamera = Vector3Normalize(Vector3Subtract(camera.position, selected_window->position));
+                // camera.target = selected_window->position;
+
+                // print distance from camera to window
+                float distance = Vector3Distance(camera.position, selected_window->position);
+                printf("Distance: %f\n", distance);
             }
         }
 
@@ -368,16 +486,12 @@ int main(void) {
         for (int i = 0; i < WIN_COUNT; i++) {
             MyWindow w = windows[i];
             DrawModel(*w.model, w.position, w.scale, WHITE);
+            // DrawBillboard(camera, *w.texture, w.position, w.scale, WHITE);
             // DrawModelWires(*w.model, w.position, w.scale, BLACK);
             // DrawModelEx(*w.model, w.position, w.rotation, 90.0f, (Vector3){w.scale, w.scale, 1.0f}, WHITE);
 
             Color color = selected_window != NULL && selected_window->window == w.window ? RED : BLACK;
-
-            float width = w.attr->width * w.scale / 350;
-            float height = w.attr->height * w.scale / 350;
-            DrawCubeWires(w.position,
-                width, 0,
-                height, color);
+            DrawWindowBorder(&w, color);
         }
 
         // rlPopMatrix();
@@ -391,8 +505,8 @@ int main(void) {
         DrawRectangle(10, 10, 200, 50, Fade(SKYBLUE, 0.5f));
         DrawRectangleLines(10, 10, 200, 50, BLUE);
 
-        char *modeText = mode == CameraMovement ? "Camera Movement" : mode == CursorMovement ? "Cursor Movement" : "Scale Object";
-        Color modeColor = mode == CameraMovement ? BLUE : mode == CursorMovement ? GREEN : RED;
+        const char *modeText = GetModeText(mode);
+        Color modeColor = GetModeColor(mode);
 
         DrawText(TextFormat("Mode: %s", modeText), 2, 0, 10, modeColor);
         DrawText("- Press [Space] to change modes", 20, 20, 10, DARKGRAY);
