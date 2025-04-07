@@ -53,10 +53,6 @@ typedef struct MyWindow {
     XWindowAttributes *attr;
     Model *model;
     Texture *texture;
-    float originalScale;
-    float scale;
-    Vector3 originalPosition;
-    Vector3 position;
 } MyWindow;
 
 void MyUpdateCamera(Camera *camera) {
@@ -69,14 +65,14 @@ void MyUpdateCamera(Camera *camera) {
 
     // Keyboard support
     float cameraMoveSpeed = CAMERA_MOVE_SPEED * GetFrameTime();
-    if (IsKeyDown(KEY_UP))
+    if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
         CameraMoveForward(camera, cameraMoveSpeed, moveInWorldPlane);
-    if (IsKeyDown(KEY_DOWN))
+    if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))
         CameraMoveForward(camera, -cameraMoveSpeed, moveInWorldPlane);
 
-    if (IsKeyDown(KEY_LEFT))
+    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
         CameraMoveRight(camera, -cameraMoveSpeed, moveInWorldPlane);
-    if (IsKeyDown(KEY_RIGHT))
+    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
         CameraMoveRight(camera, cameraMoveSpeed, moveInWorldPlane);
 
     if (IsKeyPressed(KEY_F2))
@@ -203,15 +199,6 @@ BoundingBox GetWindowBoundingBox(MyWindow *w) {
         bbox.max.z = (transformed.z > bbox.max.z) ? transformed.z : bbox.max.z;
     }
 
-    // Apply window position (assuming it's an additional offset)
-    Vector3 position = w->position;
-    bbox.min.x += position.x;
-    bbox.min.y += position.y;
-    bbox.min.z += position.z;
-    bbox.max.x += position.x;
-    bbox.max.y += position.y;
-    bbox.max.z += position.z;
-
     return bbox;
 }
 
@@ -225,15 +212,47 @@ void DrawWindowBorder(MyWindow *w, Color color) {
     Vector3 v3 = Vector3Transform((Vector3){vertices[6], vertices[7], vertices[8]}, transform);
     Vector3 v4 = Vector3Transform((Vector3){vertices[9], vertices[10], vertices[11]}, transform);
 
-    v1 = Vector3Add(v1, w->position);
-    v2 = Vector3Add(v2, w->position);
-    v3 = Vector3Add(v3, w->position);
-    v4 = Vector3Add(v4, w->position);
+    DrawSphere(v1, 0.02f, RED);
+    DrawSphere(v2, 0.02f, YELLOW);
+    DrawSphere(v3, 0.02f, GREEN);
+    DrawSphere(v4, 0.02f, BLUE);
 
     DrawLine3D(v1, v2, color);
     DrawLine3D(v2, v4, color);
     DrawLine3D(v4, v3, color);
     DrawLine3D(v3, v1, color);
+}
+
+Vector3 GetWindowNormal(const MyWindow *w) {
+    float *vertices = w->model->meshes[0].vertices;
+    Matrix transform = w->model->transform;
+
+    // Calculate the normal vector (assuming the window is facing +Y in its local space)
+    Vector3 normal = Vector3Transform((Vector3){0, 1, 0}, transform);
+    normal = Vector3Subtract(normal, Vector3Transform((Vector3){0, 0, 0}, transform));
+    return Vector3Normalize(normal);
+}
+
+Vector3 GetWindowCenter(const MyWindow *w) {
+    float *vertices = w->model->meshes[0].vertices;
+    Matrix transform = w->model->transform;
+
+    // Calculate the center of the window
+    Vector3 v2 = Vector3Transform((Vector3){vertices[3], vertices[4], vertices[5]}, transform);
+    Vector3 v3 = Vector3Transform((Vector3){vertices[6], vertices[7], vertices[8]}, transform);
+    return Vector3Scale(Vector3Add(v2, v3), 0.5f);
+}
+
+void DrawWindowNormal(const MyWindow *w, Color color) {
+    Vector3 normal = GetWindowNormal(w);
+    Vector3 center = GetWindowCenter(w);
+
+    // Draw the normal vector
+    Vector3 endPoint = Vector3Add(center, Vector3Scale(normal, 0.5f)); // Adjust the 0.5f to change the length of the normal
+    DrawLine3D(center, endPoint, color);
+
+    // Draw a small sphere at the end of the normal vector
+    DrawSphere(endPoint, 0.02f, color);
 }
 
 int main(void) {
@@ -261,13 +280,7 @@ int main(void) {
 
     MyWindow windows[WIN_COUNT] = {0};
     windows[0].window = 0x1e0002c;
-    windows[0].position = (Vector3){0, 3.25f, -1};
-    // windows[0].rotation = (Vector3){1, 0, 0};
-    // windows[0].rotationAngle = 90;
     windows[1].window = 0x2a00003;
-    windows[1].position = (Vector3){2, 2.25f, -0.8};
-    // windows[1].rotation = (Vector3){1, 0, 0};
-    // windows[1].rotationAngle = 90;
 
     for (int i = 0; i < WIN_COUNT; i++) {
         MyWindow w = windows[i];
@@ -295,11 +308,13 @@ int main(void) {
 
         // printf("Window %d texture id: %d\n", i, w.texture->id);
 
-        w.scale = 1;
-        w.originalScale = 1;
 
         windows[i] = w;
     }
+
+    Matrix fixedMat = MatrixRotateX(PI / 2);
+    windows[0].model->transform = MatrixMultiply(fixedMat, MatrixTranslate(0, 3.25f, -0.8));
+    windows[1].model->transform = MatrixMultiply(fixedMat, MatrixTranslate(2, 2.25f, -1));
 
     MyWindow *selected_window = &windows[0];
     ControlMode mode = CursorMovement;
@@ -310,6 +325,7 @@ int main(void) {
     Ray ray = {0};
     RayCollision collision = { 0 };
     Vector2 originalMousePosition = {0};
+    Matrix originalTransform = {0};
 
     float rotationAngle = 0.0f;
 
@@ -338,19 +354,17 @@ int main(void) {
             }
             else if (selected_window != NULL && IsKeyPressed(KEY_S)) {
                 mode = ScaleWindow;
-                selected_window->originalScale = selected_window->scale;
+                originalTransform = selected_window->model->transform;
             }
             else if (selected_window != NULL && IsKeyPressed(KEY_Z)) {
                 mode = MoveWindowZ;
-                selected_window->originalPosition = selected_window->position;
-                camera.target = selected_window->position;
+                originalTransform = selected_window->model->transform;
+                // camera.target = selected_window->position;
                 originalMousePosition = GetMousePosition();
             }
             else if (selected_window != NULL && IsKeyPressed(KEY_G)) {
                 mode = MoveWindowXY;
-                selected_window->originalPosition = selected_window->position;
-                // camera.target.x = selected_window->position.x;
-                // camera.target.z = selected_window->position.z;
+                originalTransform = selected_window->model->transform;
                 originalMousePosition = GetMousePosition();
             }
             else {//if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -383,7 +397,7 @@ int main(void) {
             }
             else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
                 mode = CursorMovement;
-                selected_window->scale = selected_window->originalScale;
+                selected_window->model->transform = originalTransform;
             }
             else {
                 //TODO: maybe scale based on mouse velocity instead
@@ -401,8 +415,8 @@ int main(void) {
                 scale *= 5*scale; // scale quadratically
                 if (scale < 0.03f) scale = 0.03f; // minimum scale
                 if (scale > 10.0f) scale = 10.0f; // maximum scale
-                selected_window->scale = scale;
-                printf("Scale: %f\n", selected_window->scale);
+                Matrix scaleMat = MatrixScale(scale, scale, scale);
+                selected_window->model->transform = MatrixMultiply(scaleMat, originalTransform);
             }
         }
         else if (mode == MoveWindowZ) {
@@ -411,17 +425,19 @@ int main(void) {
             }
             else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
                 mode = CursorMovement;
-                selected_window->position = selected_window->originalPosition;
+                selected_window->model->transform = originalTransform;
             }
             else {
                 // move window toward the camera when mouse is above center
                 // move window away from the camera when mouse is below center
 
-                Vector3 moveDirection = Vector3Subtract(selected_window->originalPosition, camera.position);
+                Vector3 pos = {originalTransform.m12, originalTransform.m13, originalTransform.m14};
+                Vector3 moveDirection = Vector3Subtract(pos, camera.position);
                 float scalar = (originalMousePosition.y - GetMouseY()) / 60.0f;
-                selected_window->position = Vector3Add(
-                    Vector3Scale(moveDirection, scalar),
-                    selected_window->originalPosition);
+                Vector3 moveVector = Vector3Scale(moveDirection, scalar);
+
+                Matrix m = MatrixTranslate(moveVector.x, moveVector.y, moveVector.z);
+                selected_window->model->transform = MatrixMultiply(originalTransform, m);
             }
         }
         else if (mode == MoveWindowXY) {
@@ -430,26 +446,24 @@ int main(void) {
             }
             else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
                 mode = CursorMovement;
-                selected_window->position = selected_window->originalPosition;
-                camera.target = selected_window->position;
+                selected_window->model->transform = originalTransform;
+                // camera.target = selected_window->position;
             }
             else {
-                // TODO: window should orbit the camera at constant distance
                 Vector2 mousePosition = GetMousePosition();
-                Vector3 directionOfWindow = Vector3Subtract(selected_window->originalPosition, camera.position);
+                Vector3 pos = {originalTransform.m12, originalTransform.m13, originalTransform.m14};
+                Vector3 directionOfWindow = Vector3Subtract(pos, camera.position);
 
-                // Vector3 normalizedMoveDirection = Vector2
-                Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, (Vector3){0, 1, 0}, (originalMousePosition.x - mousePosition.x) / 100.0f);
-                Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX , (Vector3){1, 0, 0}, (originalMousePosition.y - mousePosition.y) / 100.0f);
+                Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, (Vector3){0, 1, 0}, (originalMousePosition.x - mousePosition.x) / 800.0f);
+                Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX, (Vector3){1, 0, 0}, (originalMousePosition.y - mousePosition.y) / 800.0f);
 
-                selected_window->position = Vector3Add(camera.position, moveDirection);
+                Vector3 moveVector = Vector3Subtract(moveDirection, directionOfWindow);
 
-                // Vector3 windowToCamera = Vector3Normalize(Vector3Subtract(camera.position, selected_window->position));
-                // camera.target = selected_window->position;
+                Matrix m = MatrixTranslate(moveVector.x, moveVector.y, moveVector.z);
+                selected_window->model->transform = MatrixMultiply(originalTransform, m);
 
-                // print distance from camera to window
-                float distance = Vector3Distance(camera.position, selected_window->position);
-                printf("Distance: %f\n", distance);
+                // float distance = Vector3Distance(pos, camera.position);
+                // printf("Distance: %f\n", distance);
             }
         }
 
@@ -485,13 +499,13 @@ int main(void) {
 
         for (int i = 0; i < WIN_COUNT; i++) {
             MyWindow w = windows[i];
-            DrawModel(*w.model, w.position, w.scale, WHITE);
-            // DrawBillboard(camera, *w.texture, w.position, w.scale, WHITE);
-            // DrawModelWires(*w.model, w.position, w.scale, BLACK);
-            // DrawModelEx(*w.model, w.position, w.rotation, 90.0f, (Vector3){w.scale, w.scale, 1.0f}, WHITE);
+            DrawModel(*w.model, ORIGIN, 1.0f, WHITE);
 
             Color color = selected_window != NULL && selected_window->window == w.window ? RED : BLACK;
             DrawWindowBorder(&w, color);
+
+            if (selected_window->window == w.window)
+                DrawWindowNormal(&w, GREEN);
         }
 
         // rlPopMatrix();
