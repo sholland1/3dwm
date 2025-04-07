@@ -53,6 +53,7 @@ typedef struct MyWindow {
     XWindowAttributes *attr;
     Model *model;
     Texture *texture;
+    bool visible;
 } MyWindow;
 
 void MyUpdateCamera(Camera *camera) {
@@ -308,6 +309,7 @@ int main(void) {
 
         // printf("Window %d texture id: %d\n", i, w.texture->id);
 
+        w.visible = true;
 
         windows[i] = w;
     }
@@ -346,11 +348,21 @@ int main(void) {
                 mode = CursorMovement;
                 EnableCursor();
             }
+            else if (IsKeyPressed(KEY_H)) {
+                for (int i = 0; i < WIN_COUNT; i++) {
+                    windows[i].visible = !windows[i].visible;
+                }
+            }
         }
         else if (mode == CursorMovement) {
             if (IsKeyPressed(KEY_SPACE)) {
                 mode = CameraMovement;
                 DisableCursor();
+            }
+            else if (IsKeyPressed(KEY_H)) {
+                for (int i = 0; i < WIN_COUNT; i++) {
+                    windows[i].visible = !windows[i].visible;
+                }
             }
             else if (selected_window != NULL && IsKeyPressed(KEY_S)) {
                 mode = ScaleWindow;
@@ -489,6 +501,7 @@ int main(void) {
         DrawRay(ray, GREEN);
         for (int i = 0; i < WIN_COUNT; i++) {
             MyWindow w = windows[i];
+            if (!w.visible) break;
 
             BoundingBox bbox = GetWindowBoundingBox(&w);
             DrawBoundingBox(bbox, BLUE);
@@ -499,6 +512,7 @@ int main(void) {
 
         for (int i = 0; i < WIN_COUNT; i++) {
             MyWindow w = windows[i];
+            if (!w.visible) break;
             DrawModel(*w.model, ORIGIN, 1.0f, WHITE);
 
             Color color = selected_window != NULL && selected_window->window == w.window ? RED : BLACK;
