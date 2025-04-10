@@ -160,49 +160,6 @@ int MyUpdateTexture(const XImage *image, Texture *texture) {
     UpdateTexture(*texture, image->data);
 }
 
-BoundingBox GetWindowBoundingBox(MyWindow *w) {
-    Mesh mesh = w->model->meshes[0];
-    int vertexCount = mesh.vertexCount;
-    float *vertices = mesh.vertices;
-    Matrix transform = w->model->transform;  // Assuming transform is a 4x4 matrix
-
-    // Transform first vertex to initialize bbox
-    Vector3 firstVertex = {
-        vertices[0],  // x
-        vertices[1],  // y
-        vertices[2]   // z
-    };
-    Vector3 firstTransformed = Vector3Transform(firstVertex, transform);
-    BoundingBox bbox = {
-        .min = firstTransformed,
-        .max = firstTransformed
-    };
-
-    // Process remaining vertices
-    for (int i = 1; i < vertexCount; i++) {
-        int base = i * 3;
-        Vector3 vertex = {
-            vertices[base],
-            vertices[base + 1],
-            vertices[base + 2]
-        };
-
-        // Transform vertex by the model's transform matrix
-        Vector3 transformed = Vector3Transform(vertex, transform);
-
-        // Update bounds
-        bbox.min.x = (transformed.x < bbox.min.x) ? transformed.x : bbox.min.x;
-        bbox.min.y = (transformed.y < bbox.min.y) ? transformed.y : bbox.min.y;
-        bbox.min.z = (transformed.z < bbox.min.z) ? transformed.z : bbox.min.z;
-
-        bbox.max.x = (transformed.x > bbox.max.x) ? transformed.x : bbox.max.x;
-        bbox.max.y = (transformed.y > bbox.max.y) ? transformed.y : bbox.max.y;
-        bbox.max.z = (transformed.z > bbox.max.z) ? transformed.z : bbox.max.z;
-    }
-
-    return bbox;
-}
-
 void DrawWindowBorder(MyWindow *w, Color color) {
     //TODO: maybe use a shader for this
     float *vertices = w->model->meshes[0].vertices;
@@ -414,21 +371,13 @@ int main(void) {
                 RayCollision tempCollision = {0};
                 // Check collision between ray and box
                 for (int i = 0; i < WIN_COUNT; i++) {
-                    //TODO: cast ray into each triangle instead of using bounding box
                     MyWindow w = windows[i];
-                    // printf("Window %d: %d\n", i, w.window);
-                    // printf("Window %d: %d\n", i, collision.hit);
-
-                    // get the bounding box of the plane
-                    tempCollision = GetRayCollisionBox(ray, GetWindowBoundingBox(&w));
+                    tempCollision = GetRayCollisionMesh(ray, w.model->meshes[0], w.model->transform);
                     if (tempCollision.hit && tempCollision.distance <= collision.distance) {
                         collision = tempCollision;
                         selected_window = &windows[i];
                     }
                 }
-                // if (collision.hit) {
-                //     printf("Selected window: %d\n", i);
-                // }
             }
         }
         else if (mode == ScaleWindow) {
@@ -527,13 +476,6 @@ int main(void) {
             DrawCube(collision.point, 0.1f, 0.1f, 0.1f, RED);
         }
         DrawRay(ray, GREEN);
-        for (int i = 0; i < WIN_COUNT; i++) {
-            MyWindow w = windows[i];
-            if (!w.visible) break;
-
-            BoundingBox bbox = GetWindowBoundingBox(&w);
-            DrawBoundingBox(bbox, BLUE);
-        }
 
         for (int i = 0; i < WIN_COUNT; i++) {
             MyWindow w = windows[i];
