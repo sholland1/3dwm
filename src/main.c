@@ -242,34 +242,32 @@ int main(void) {
     windows[1].window = 0x2a00003;
 
     for (int i = 0; i < WIN_COUNT; i++) {
-        MyWindow w = windows[i];
-        w.attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
-        if (XGetWindowAttributes(display, w.window, w.attr) == 0) {
+        MyWindow *w = &windows[i];
+        w->attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
+        if (XGetWindowAttributes(display, w->window, w->attr) == 0) {
             fprintf(stderr, "Unable to get window attributes\n");
             XCloseDisplay(display);
             return 1;
         }
 
         // Create a simple plane mesh
-        Mesh plane = GenMeshPlane(w.attr->width / 350.0f, w.attr->height / 350.0f, 1, 1); // Width, length, resX, resZ
+        Mesh plane = GenMeshPlane(w->attr->width / 350.0f, w->attr->height / 350.0f, 1, 1); // Width, length, resX, resZ
         // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
 
-        w.model = (Model *)malloc(sizeof(Model));
-        *w.model = LoadModelFromMesh(plane);
+        w->model = (Model *)malloc(sizeof(Model));
+        *w->model = LoadModelFromMesh(plane);
 
         // Set the model's material to use the texture
-        w.texture = (Texture *)malloc(sizeof(Texture));
+        w->texture = (Texture *)malloc(sizeof(Texture));
 
-        XImage *image = XGetRGBImage(display, w.window, 0, 0, w.attr->width, w.attr->height);
-        MySetTexture(image, w.texture);
-        w.model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *w.texture;
+        XImage *image = XGetRGBImage(display, w->window, 0, 0, w->attr->width, w->attr->height);
+        MySetTexture(image, w->texture);
+        w->model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *w->texture;
         // XDestroyImage(image);
 
         // printf("Window %d texture id: %d\n", i, w.texture->id);
 
-        w.visible = true;
-
-        windows[i] = w;
+        w->visible = true;
     }
 
     windows[0].model->transform = MatrixTranslate(0, 3.25f, -0.8);
@@ -293,9 +291,9 @@ int main(void) {
     while (!WindowShouldClose()) {
         // if (IsKeyPressed(KEY_TAB)) {
             for (int i = 0; i < WIN_COUNT; i++) {
-                MyWindow w = windows[i];
+                MyWindow *w = &windows[i];
 
-                Matrix t = w.model->transform;
+                Matrix t = w->model->transform;
                 Vector3 pos = {t.m12, t.m13, t.m14};
                 Vector3 direction = Vector3Subtract(camera.position, pos);
 
@@ -322,7 +320,7 @@ int main(void) {
                 };
 
                 // Set transform with position
-                w.model->transform = newTransform;
+                w->model->transform = newTransform;
             }
         // }
 
@@ -371,11 +369,11 @@ int main(void) {
                 RayCollision tempCollision = {0};
                 // Check collision between ray and box
                 for (int i = 0; i < WIN_COUNT; i++) {
-                    MyWindow w = windows[i];
-                    tempCollision = GetRayCollisionMesh(ray, w.model->meshes[0], w.model->transform);
+                    MyWindow *w = &windows[i];
+                    tempCollision = GetRayCollisionMesh(ray, w->model->meshes[0], w->model->transform);
                     if (tempCollision.hit && tempCollision.distance <= collision.distance) {
                         collision = tempCollision;
-                        selected_window = &windows[i];
+                        selected_window = w;
                     }
                 }
             }
@@ -478,15 +476,15 @@ int main(void) {
         DrawRay(ray, GREEN);
 
         for (int i = 0; i < WIN_COUNT; i++) {
-            MyWindow w = windows[i];
-            if (!w.visible) break;
-            DrawModel(*w.model, ORIGIN, 1.0f, WHITE);
+            MyWindow *w = &windows[i];
+            if (!w->visible) break;
+            DrawModel(*w->model, ORIGIN, 1.0f, WHITE);
 
-            Color color = selected_window != NULL && selected_window->window == w.window ? RED : BLACK;
-            DrawWindowBorder(&w, color);
+            Color color = selected_window != NULL && selected_window->window == w->window ? RED : BLACK;
+            DrawWindowBorder(w, color);
 
-            if (selected_window->window == w.window)
-                DrawWindowNormal(&w, GREEN);
+            if (selected_window->window == w->window)
+                DrawWindowNormal(w, GREEN);
         }
 
         EndMode3D();
@@ -511,9 +509,9 @@ int main(void) {
 
     // cleanup
     for (int i = 0; i < WIN_COUNT; i++) {
-        MyWindow w = windows[i];
-        UnloadModel(*w.model);
-        XFree(w.attr);
+        MyWindow *w = &windows[i];
+        UnloadModel(*w->model);
+        XFree(w->attr);
     }
     XCloseDisplay(display);
     CloseWindow();
