@@ -230,7 +230,8 @@ Vector3 GetWindowNormal(const MyWindow *w) {
 
     // Calculate the normal vector (assuming the window is facing +Y in its local space)
     Vector3 normal = Vector3Transform((Vector3){0, 1, 0}, transform);
-    normal = Vector3Subtract(normal, Vector3Transform((Vector3){0, 0, 0}, transform));
+    Vector3 transformedVec = Vector3Transform((Vector3){0, 0, 0}, transform);
+    normal = Vector3Subtract(normal, transformedVec);
     return Vector3Normalize(normal);
 }
 
@@ -314,9 +315,8 @@ int main(void) {
         windows[i] = w;
     }
 
-    Matrix fixedMat = MatrixRotateX(PI / 2);
-    windows[0].model->transform = MatrixMultiply(fixedMat, MatrixTranslate(0, 3.25f, -0.8));
-    windows[1].model->transform = MatrixMultiply(fixedMat, MatrixTranslate(2, 2.25f, -1));
+    windows[0].model->transform = MatrixTranslate(0, 3.25f, -0.8);
+    windows[1].model->transform = MatrixTranslate(2, 2.25f, -1);
 
     MyWindow *selected_window = &windows[0];
     ControlMode mode = CursorMovement;
@@ -330,17 +330,44 @@ int main(void) {
     Matrix originalTransform = {0};
 
     float rotationAngle = 0.0f;
+    Vector3 nextNormal = {0};
 
     // game loop
     while (!WindowShouldClose()) {
-        if (IsKeyDown(KEY_TAB)) {
+        // if (IsKeyPressed(KEY_TAB)) {
             for (int i = 0; i < WIN_COUNT; i++) {
                 MyWindow w = windows[i];
 
-                rotationAngle += 0.01f;
-                w.model->transform = MatrixRotateXYZ((Vector3){rotationAngle, 0, 0});
+                Matrix t = w.model->transform;
+                Vector3 pos = {t.m12, t.m13, t.m14};
+                Vector3 direction = Vector3Subtract(camera.position, pos);
+
+                // Define the new Y-axis as the direction to the camera
+                Vector3 Y = Vector3Normalize(direction);
+
+                // Define an up vector (world up, unless direction is nearly vertical)
+                Vector3 up = {0.0f, 1.0f, 0.0f};
+                if (fabsf(Y.y) > 0.999f) { // If direction is nearly vertical, adjust up vector
+                    up = (Vector3){0.0f, 0.0f, 1.0f};
+                }
+
+                // X-axis perpendicular to Y and up
+                Vector3 X = Vector3Normalize(Vector3CrossProduct(up, Y));
+                // Z-axis completes the orthonormal basis
+                Vector3 Z = Vector3CrossProduct(X, Y);
+
+                // Construct rotation matrix (columns are X, Y, Z)
+                Matrix newTransform = {
+                    X.x, Y.x, Z.x, pos.x,
+                    X.y, Y.y, Z.y, pos.y,
+                    X.z, Y.z, Z.z, pos.z,
+                    0.0f, 0.0f, 0.0f, 1.0f
+                };
+
+                // Set transform with position
+                w.model->transform = newTransform;
             }
-        }
+        // }
 
         if (mode == CameraMovement) {
             MyUpdateCamera(&camera);
@@ -387,6 +414,7 @@ int main(void) {
                 RayCollision tempCollision = {0};
                 // Check collision between ray and box
                 for (int i = 0; i < WIN_COUNT; i++) {
+                    //TODO: cast ray into each triangle instead of using bounding box
                     MyWindow w = windows[i];
                     // printf("Window %d: %d\n", i, w.window);
                     // printf("Window %d: %d\n", i, collision.hit);
@@ -507,9 +535,6 @@ int main(void) {
             DrawBoundingBox(bbox, BLUE);
         }
 
-        // rlPushMatrix();
-        // rlRotatef(90.0f, 1.0f, 0.0f, 0.0f);
-
         for (int i = 0; i < WIN_COUNT; i++) {
             MyWindow w = windows[i];
             if (!w.visible) break;
@@ -521,8 +546,6 @@ int main(void) {
             if (selected_window->window == w.window)
                 DrawWindowNormal(&w, GREEN);
         }
-
-        // rlPopMatrix();
 
         EndMode3D();
 
