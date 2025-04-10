@@ -441,23 +441,22 @@ int main(void) {
             else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
                 mode = CursorMovement;
                 selected_window->model->transform = originalTransform;
-                // camera.target = selected_window->position;
             }
             else {
                 Vector2 mousePosition = GetMousePosition();
                 Vector3 pos = {originalTransform.m12, originalTransform.m13, originalTransform.m14};
                 Vector3 directionOfWindow = Vector3Subtract(pos, camera.position);
 
-                Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, (Vector3){0, 1, 0}, (originalMousePosition.x - mousePosition.x) / 800.0f);
-                Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX, (Vector3){1, 0, 0}, (originalMousePosition.y - mousePosition.y) / 800.0f);
+                Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
+                Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
+
+                Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, camera.up, (originalMousePosition.x - mousePosition.x) / 800.0f);
+                Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX, right, (originalMousePosition.y - mousePosition.y) / 800.0f);
 
                 Vector3 moveVector = Vector3Subtract(moveDirection, directionOfWindow);
 
-                Matrix m = MatrixTranslate(moveVector.x, moveVector.y, moveVector.z);
-                selected_window->model->transform = MatrixMultiply(originalTransform, m);
-
-                // float distance = Vector3Distance(pos, camera.position);
-                // printf("Distance: %f\n", distance);
+                Matrix m = MatrixTranslate(pos.x + moveVector.x, pos.y + moveVector.y, pos.z + moveVector.z);
+                selected_window->model->transform = LookAtTarget(m, camera.position);
             }
         }
 
