@@ -214,6 +214,40 @@ void DrawWindowNormal(const MyWindow *w, Color color) {
     DrawSphere(endPoint, 0.02f, color);
 }
 
+Matrix LookAtTarget(Matrix transform, Vector3 target) {
+    Vector3 pos = {transform.m12, transform.m13, transform.m14};
+
+    // Extract scale from original transform
+    Vector3 originalX = {transform.m0, transform.m1, transform.m2};
+    float scale = Vector3Length(originalX);
+
+    Vector3 direction = Vector3Subtract(target, pos);
+
+    // Define the new Y-axis as the direction to the camera
+    Vector3 Y = Vector3Normalize(direction);
+
+    // Define an up vector (world up, unless direction is nearly vertical)
+    Vector3 up = {0.0f, 1.0f, 0.0f};
+    if (fabsf(Y.y) > 0.999f) { // If direction is nearly vertical, adjust up vector
+        up = (Vector3){0.0f, 0.0f, 1.0f};
+    }
+
+    // X-axis perpendicular to Y and up
+    Vector3 X = Vector3Normalize(Vector3CrossProduct(up, Y));
+    // Z-axis completes the orthonormal basis
+    Vector3 Z = Vector3CrossProduct(X, Y);
+
+    // Construct rotation matrix (columns are X, Y, Z)
+    Matrix newTransform = {
+        X.x * scale, Y.x * scale, Z.x * scale, pos.x,
+        X.y * scale, Y.y * scale, Z.y * scale, pos.y,
+        X.z * scale, Y.z * scale, Z.z * scale, pos.z,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+
+    return newTransform;
+}
+
 int main(void) {
     // Tell the window to use vsync and work on high DPI displays
     SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
@@ -270,8 +304,8 @@ int main(void) {
         w->visible = true;
     }
 
-    windows[0].model->transform = MatrixTranslate(0, 3.25f, -0.8);
-    windows[1].model->transform = MatrixTranslate(2, 2.25f, -1);
+    windows[0].model->transform = LookAtTarget(MatrixTranslate(0, 3.25f, -0.8), camera.position);
+    windows[1].model->transform = LookAtTarget(MatrixTranslate(2, 2.25f, -1), camera.position);
 
     MyWindow *selected_window = &windows[0];
     ControlMode mode = CursorMovement;
@@ -289,41 +323,6 @@ int main(void) {
 
     // game loop
     while (!WindowShouldClose()) {
-        // if (IsKeyPressed(KEY_TAB)) {
-            for (int i = 0; i < WIN_COUNT; i++) {
-                MyWindow *w = &windows[i];
-
-                Matrix t = w->model->transform;
-                Vector3 pos = {t.m12, t.m13, t.m14};
-                Vector3 direction = Vector3Subtract(camera.position, pos);
-
-                // Define the new Y-axis as the direction to the camera
-                Vector3 Y = Vector3Normalize(direction);
-
-                // Define an up vector (world up, unless direction is nearly vertical)
-                Vector3 up = {0.0f, 1.0f, 0.0f};
-                if (fabsf(Y.y) > 0.999f) { // If direction is nearly vertical, adjust up vector
-                    up = (Vector3){0.0f, 0.0f, 1.0f};
-                }
-
-                // X-axis perpendicular to Y and up
-                Vector3 X = Vector3Normalize(Vector3CrossProduct(up, Y));
-                // Z-axis completes the orthonormal basis
-                Vector3 Z = Vector3CrossProduct(X, Y);
-
-                // Construct rotation matrix (columns are X, Y, Z)
-                Matrix newTransform = {
-                    X.x, Y.x, Z.x, pos.x,
-                    X.y, Y.y, Z.y, pos.y,
-                    X.z, Y.z, Z.z, pos.z,
-                    0.0f, 0.0f, 0.0f, 1.0f
-                };
-
-                // Set transform with position
-                w->model->transform = newTransform;
-            }
-        // }
-
         if (mode == CameraMovement) {
             MyUpdateCamera(&camera);
             if (IsKeyPressed(KEY_Q) || IsKeyPressed(KEY_SPACE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -334,6 +333,14 @@ int main(void) {
                 for (int i = 0; i < WIN_COUNT; i++) {
                     windows[i].visible = !windows[i].visible;
                 }
+            }
+            else {
+        // if (IsKeyPressed(KEY_TAB)) {
+            for (int i = 0; i < WIN_COUNT; i++) {
+                MyWindow *w = &windows[i];
+                w->model->transform = LookAtTarget(w->model->transform, camera.position);
+            }
+        // }
             }
         }
         else if (mode == CursorMovement) {
