@@ -202,36 +202,36 @@ XImage *XGetRGBImage(Display *display, Window window, int x, int y, unsigned int
     return image;
 }
 
-Texture MySetTexture(const XImage *image) {
+void MyUpdateTexture(Display *display, MyWindow *w) {
+    XWindowAttributes attr;
+    XGetWindowAttributes(display, w->window, &attr);
+
+    XImage *image = XGetRGBImage(display, w->window, 0, 0, attr.width, attr.height);
     if (image == NULL) {
         fprintf(stderr, "Unable to get image\n");
         exit(1);
     }
 
-    // Convert rearranged data to Image
-    Image rlImg = {
-        .data = image->data,
-        .width = image->width,
-        .height = image->height,
-        .mipmaps = 1,
-        .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, // Raylib does not have a B8R8G8 format
-    };
+    if (w->texture.id == 0) {
+        // Convert rearranged data to Image
+        Image rlImg = {
+            .data = image->data,
+            .width = image->width,
+            .height = image->height,
+            .mipmaps = 1,
+            .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, // Raylib does not have a B8R8G8 format
+        };
 
-    Texture texture = LoadTextureFromImage(rlImg);
-    if (texture.id == 0) {
-        fprintf(stderr, "Unable to load texture\n");
-        exit(1);
+        w->texture = LoadTextureFromImage(rlImg);
+        if (w->texture.id == 0) {
+            fprintf(stderr, "Unable to load texture\n");
+            exit(1);
+        }
+        SetTextureFilter(w->texture, TEXTURE_FILTER_BILINEAR);
+        UnloadImage(rlImg); // Properly unload the image to avoid memory leaks
+        return;
     }
-    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
-    UnloadImage(rlImg); // Properly unload the image to avoid memory leaks
 
-    return texture;
-}
-
-void MyUpdateTexture(Display *display, MyWindow *w) {
-    XWindowAttributes attr;
-    XGetWindowAttributes(display, w->window, &attr);
-    XImage *image = XGetRGBImage(display, w->window, 0, 0, attr.width, attr.height);
     UpdateTexture(w->texture, image->data);
     XDestroyImage(image);
 }
@@ -476,6 +476,7 @@ MyWindow *WindowInit(Display *display, Camera camera, Window id, Vector3 pos) {
     }
 
     w->window = id;
+    w->texture.id = 0;
 
     XWindowAttributes attr;
     if (XGetWindowAttributes(display, w->window, &attr) == 0) {
@@ -495,10 +496,8 @@ MyWindow *WindowInit(Display *display, Camera camera, Window id, Vector3 pos) {
     }
     *w->model = LoadModelFromMesh(plane);
 
-    XImage *image = XGetRGBImage(display, w->window, 0, 0, attr.width, attr.height);
-    w-> texture = MySetTexture(image);
+    MyUpdateTexture(display, w);
     w->model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = w->texture;
-    // XDestroyImage(image);
 
     // printf("Window %d texture id: %d\n", i, w.texture->id);
     w->model->transform = LookAtTarget(MatrixTranslate(pos.x, pos.y, pos.z), camera.position);
