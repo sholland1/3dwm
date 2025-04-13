@@ -457,8 +457,12 @@ void GameUpdate(GameState *game) {
 
             Vector3 moveVector = Vector3Subtract(moveDirection, directionOfWindow);
 
+            float scale = Vector3Length((Vector3){orig_t.m0, orig_t.m1, orig_t.m2});
             Vector3 newPos = Vector3Add(pos, moveVector);
-            Matrix m = MatrixTranslate(newPos.x, newPos.y, newPos.z);
+
+            Matrix m = MatrixMultiply(
+                MatrixScale(scale, scale, scale),
+                MatrixTranslate(newPos.x, newPos.y, newPos.z));
             game->selected_window->model->transform = LookAtTarget(m, game->camera.position);
         }
     }
