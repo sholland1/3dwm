@@ -29,7 +29,6 @@ typedef enum {
 
 typedef struct {
     Window window;
-    XWindowAttributes *attr;
     Model *model;
     Texture texture;
     bool visible;
@@ -226,7 +225,15 @@ Texture MySetTexture(const XImage *image) {
     SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
     UnloadImage(rlImg); // Properly unload the image to avoid memory leaks
 
-    return texture; // Assign the new texture to the model's material
+    return texture;
+}
+
+void MyUpdateTexture(Display *display, MyWindow *w) {
+    XWindowAttributes attr;
+    XGetWindowAttributes(display, w->window, &attr);
+    XImage *image = XGetRGBImage(display, w->window, 0, 0, attr.width, attr.height);
+    UpdateTexture(w->texture, image->data);
+    XDestroyImage(image);
 }
 
 void DrawWindowBorder(MyWindow *w, Color color) {
@@ -457,10 +464,7 @@ void WMUpdate(WMState *wm) {
     }
 
     if (wm->selected_window != NULL) {
-        MyWindow w = *wm->selected_window;
-        XImage *image = XGetRGBImage(wm->display, w.window, 0, 0, w.attr->width, w.attr->height);
-        UpdateTexture(w.texture, image->data);
-        XDestroyImage(image);
+        MyUpdateTexture(wm->display, wm->selected_window);
     }
 }
 
@@ -473,15 +477,15 @@ MyWindow *WindowInit(Display *display, Camera camera, Window id, Vector3 pos) {
 
     w->window = id;
 
-    w->attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
-    if (XGetWindowAttributes(display, w->window, w->attr) == 0) {
+    XWindowAttributes attr;
+    if (XGetWindowAttributes(display, w->window, &attr) == 0) {
         fprintf(stderr, "Unable to get window attributes\n");
         XCloseDisplay(display);
         exit(1);
     }
 
     // Create a simple plane mesh
-    Mesh plane = GenMeshPlane(w->attr->width / 350.0f, w->attr->height / 350.0f, 1, 1); // Width, length, resX, resZ
+    Mesh plane = GenMeshPlane(attr.width / 350.0f, attr.height / 350.0f, 1, 1); // Width, length, resX, resZ
     // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
 
     w->model = (Model *)malloc(sizeof(Model));
@@ -491,7 +495,7 @@ MyWindow *WindowInit(Display *display, Camera camera, Window id, Vector3 pos) {
     }
     *w->model = LoadModelFromMesh(plane);
 
-    XImage *image = XGetRGBImage(display, w->window, 0, 0, w->attr->width, w->attr->height);
+    XImage *image = XGetRGBImage(display, w->window, 0, 0, attr.width, attr.height);
     w-> texture = MySetTexture(image);
     w->model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = w->texture;
     // XDestroyImage(image);
@@ -606,7 +610,6 @@ int main(void) {
     // cleanup
     FOR_EACH_WINDOW(w, wm->windows) {
         UnloadModel(*w->model);
-        XFree(w->attr);
     }
     XCloseDisplay(wm->display);
     CloseWindow();
