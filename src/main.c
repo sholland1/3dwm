@@ -11,20 +11,108 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <assert.h>
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
-#define WIN_COUNT 2
 
 const Vector3 ORIGIN = {0.0f, 0.0f, 0.0f};
 
-typedef enum ControlMode {
+typedef enum {
     CameraMovement,
     CursorMovement,
     ScaleWindow,
     MoveWindowZ,
     MoveWindowXY,
 } ControlMode;
+
+typedef struct {
+    Window window;
+    XWindowAttributes *attr;
+    Model *model;
+    Texture *texture;
+    bool visible;
+} MyWindow;
+
+// implement dynamic array
+#define DA_INIT_CAP 16
+
+#define da_reserve(da, expected_capacity)                                              \
+    do {                                                                               \
+        if ((expected_capacity) > (da)->capacity) {                                    \
+            if ((da)->capacity == 0) {                                                 \
+                (da)->capacity = DA_INIT_CAP;                                          \
+            }                                                                          \
+            while ((expected_capacity) > (da)->capacity) {                             \
+                (da)->capacity *= 2;                                                   \
+            }                                                                          \
+            (da)->items = realloc((da)->items, (da)->capacity * sizeof(*(da)->items)); \
+            assert((da)->items != NULL && "Buy more RAM lol");                         \
+        }                                                                              \
+    } while (0)
+
+// Append an item to a dynamic array
+#define da_append(da, item)                  \
+    do {                                     \
+        da_reserve((da), (da)->count + 1);   \
+        (da)->items[(da)->count++] = (item); \
+    } while (0)
+
+#define da_free(da) free((da).items)
+
+// Append several items to a dynamic array
+#define da_append_many(da, new_items, new_items_count)                                          \
+    do {                                                                                        \
+        da_reserve((da), (da)->count + (new_items_count));                                      \
+        memcpy((da)->items + (da)->count, (new_items), (new_items_count)*sizeof(*(da)->items)); \
+        (da)->count += (new_items_count);                                                       \
+    } while (0)
+
+#define da_resize(da, new_size)     \
+    do {                            \
+        da_reserve((da), new_size); \
+        (da)->count = (new_size);   \
+    } while (0)
+
+#define da_last(da) (da)->items[(assert((da)->count > 0), (da)->count-1)]
+
+#define da_remove_unordered(da, i)                   \
+    do {                                             \
+        size_t j = (i);                              \
+        assert(j < (da)->count);                     \
+        (da)->items[j] = (da)->items[--(da)->count]; \
+    } while(0)
+
+typedef struct {
+    MyWindow *items;
+    size_t count;
+    size_t capacity;
+} DA_window;
+
+#define FOR_EACH_WINDOW(item, array)           \
+    for (MyWindow *item = (array).items;       \
+         item < (array).items + (array).count; \
+         ++item)
+
+// Alternative version that provides the index
+#define FOR_EACH_WINDOW_INDEXED(item, index, array)                      \
+    for (size_t index = 0;                                               \
+         index < (array).count && ((item = &(array).items[index]) || 1); \
+         ++index)
+
+typedef struct {
+    Display *display;
+    Camera camera;
+    ControlMode mode;
+    DA_window windows;
+    MyWindow *selected_window;
+    Matrix original_transform;
+    Vector2 original_mouse_position;
+
+    Ray ray;
+    RayCollision collision;
+} GameState;
 
 Color GetModeColor(ControlMode m) {
     switch (m) {
@@ -47,14 +135,6 @@ const char *GetModeText(ControlMode m) {
         default: return "Unknown Mode";
     }
 }
-
-typedef struct MyWindow {
-    Window window;
-    XWindowAttributes *attr;
-    Model *model;
-    Texture *texture;
-    bool visible;
-} MyWindow;
 
 void MyUpdateCamera(Camera *camera) {
 #define CAMERA_MOUSE_MOVE_SENSITIVITY 0.005f
@@ -248,248 +328,260 @@ Matrix LookAtTarget(Matrix transform, Vector3 target) {
     return newTransform;
 }
 
-int main(void) {
+void GameUpdate(GameState *game) {
+    if (game->mode == CameraMovement) {
+        MyUpdateCamera(&game->camera);
+        if (IsKeyPressed(KEY_Q) || IsKeyPressed(KEY_SPACE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            game->mode = CursorMovement;
+            EnableCursor();
+        }
+        else if (IsKeyPressed(KEY_H)) {
+            FOR_EACH_WINDOW(w, game->windows) {
+                w->visible = !w->visible;
+            }
+        }
+        else {
+            FOR_EACH_WINDOW(w, game->windows) {
+                w->model->transform = LookAtTarget(w->model->transform, game->camera.position);
+            }
+        }
+    }
+    else if (game->mode == CursorMovement) {
+        if (IsKeyPressed(KEY_SPACE)) {
+            game->mode = CameraMovement;
+            DisableCursor();
+        }
+        else if (IsKeyPressed(KEY_H)) {
+            FOR_EACH_WINDOW(w, game->windows) {
+                w->visible = !w->visible;
+            }
+        }
+        else if (game->selected_window != NULL && IsKeyPressed(KEY_S)) {
+            game->mode = ScaleWindow;
+            game->original_transform = game->selected_window->model->transform;
+        }
+        else if (game->selected_window != NULL && IsKeyPressed(KEY_Z)) {
+            game->mode = MoveWindowZ;
+            game->original_transform = game->selected_window->model->transform;
+            game->original_mouse_position = GetMousePosition();
+        }
+        else if (game->selected_window != NULL && IsKeyPressed(KEY_G)) {
+            game->mode = MoveWindowXY;
+            game->original_transform = game->selected_window->model->transform;
+            game->original_mouse_position = GetMousePosition();
+        }
+        else {//if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            game->ray = GetScreenToWorldRay(GetMousePosition(), game->camera);
+
+            game->collision.distance = 1000000.0f;
+            game->collision.hit = false;
+            RayCollision tempCollision = {0};
+            // Check collision between ray and box
+            FOR_EACH_WINDOW(w, game->windows) {
+                tempCollision = GetRayCollisionMesh(game->ray, w->model->meshes[0], w->model->transform);
+                if (tempCollision.hit && tempCollision.distance <= game->collision.distance) {
+                    game->collision = tempCollision;
+                    game->selected_window = w;
+                }
+            }
+        }
+    }
+    else if (game->mode == ScaleWindow) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            game->mode = CursorMovement;
+        }
+        else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
+            game->mode = CursorMovement;
+            game->selected_window->model->transform = game->original_transform;
+        }
+        else {
+            //TODO: maybe scale based on mouse velocity instead
+            //      maybe wrap around the screen
+
+            // scale based on mouse position distance from the center of the screen
+            // the closer to the center, the smaller the scale
+            // the further from the center, the larger the scale
+            // should scale quadratically
+
+            Vector2 mousePosition = GetMousePosition();
+            Vector2 screenCenter = {GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f};
+            Vector2 mouseDelta = {mousePosition.x - screenCenter.x, mousePosition.y - screenCenter.y};
+            float scale = Vector2Length(mouseDelta) / (GetScreenWidth() / 2.0f);
+            scale *= 5*scale; // scale quadratically
+            if (scale < 0.03f) scale = 0.03f; // minimum scale
+            if (scale > 10.0f) scale = 10.0f; // maximum scale
+            Matrix scaleMat = MatrixScale(scale, scale, scale);
+            game->selected_window->model->transform = MatrixMultiply(scaleMat, game->original_transform);
+        }
+    }
+    else if (game->mode == MoveWindowZ) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            game->mode = CursorMovement;
+        }
+        else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
+            game->mode = CursorMovement;
+            game->selected_window->model->transform = game->original_transform;
+        }
+        else {
+            // move window toward the camera when mouse is above center
+            // move window away from the camera when mouse is below center
+
+            Vector3 pos = {game->original_transform.m12, game->original_transform.m13, game->original_transform.m14};
+            Vector3 moveDirection = Vector3Subtract(pos, game->camera.position);
+            float scalar = (game->original_mouse_position.y - GetMouseY()) / 60.0f;
+            Vector3 moveVector = Vector3Scale(moveDirection, scalar);
+
+            Matrix m = MatrixTranslate(moveVector.x, moveVector.y, moveVector.z);
+            game->selected_window->model->transform = MatrixMultiply(game->original_transform, m);
+        }
+    }
+    else if (game->mode == MoveWindowXY) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            game->mode = CursorMovement;
+        }
+        else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
+            game->mode = CursorMovement;
+            game->selected_window->model->transform = game->original_transform;
+        }
+        else {
+            Vector2 mousePosition = GetMousePosition();
+            Matrix orig_t = game->original_transform;
+            Vector3 pos = {orig_t.m12, orig_t.m13, orig_t.m14};
+            Vector3 directionOfWindow = Vector3Subtract(pos, game->camera.position);
+
+            Vector3 forward = Vector3Normalize(Vector3Subtract(game->camera.target, game->camera.position));
+            Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, game->camera.up));
+
+            Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, game->camera.up, (game->original_mouse_position.x - mousePosition.x) / 800.0f);
+            Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX, right, (game->original_mouse_position.y - mousePosition.y) / 800.0f);
+
+            Vector3 moveVector = Vector3Subtract(moveDirection, directionOfWindow);
+
+            Vector3 newPos = Vector3Add(pos, moveVector);
+            Matrix m = MatrixTranslate(newPos.x, newPos.y, newPos.z);
+            game->selected_window->model->transform = LookAtTarget(m, game->camera.position);
+        }
+    }
+
+    if (game->selected_window != NULL) {
+        MyWindow w = *game->selected_window;
+        XImage *image = XGetRGBImage(game->display, w.window, 0, 0, w.attr->width, w.attr->height);
+        MyUpdateTexture(image, w.texture);
+        XDestroyImage(image);
+    }
+}
+
+MyWindow *WindowInit(Display *display, Camera camera, Window id, Vector3 pos) {
+    MyWindow *w = malloc(sizeof(MyWindow));
+
+    w->window = id;
+
+    w->attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
+    if (XGetWindowAttributes(display, w->window, w->attr) == 0) {
+        fprintf(stderr, "Unable to get window attributes\n");
+        XCloseDisplay(display);
+        return NULL;
+    }
+
+    // Create a simple plane mesh
+    Mesh plane = GenMeshPlane(w->attr->width / 350.0f, w->attr->height / 350.0f, 1, 1); // Width, length, resX, resZ
+    // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
+
+    w->model = (Model *)malloc(sizeof(Model));
+    *w->model = LoadModelFromMesh(plane);
+
+    // Set the model's material to use the texture
+    w->texture = (Texture *)malloc(sizeof(Texture));
+
+    XImage *image = XGetRGBImage(display, w->window, 0, 0, w->attr->width, w->attr->height);
+    MySetTexture(image, w->texture);
+    w->model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *w->texture;
+    // XDestroyImage(image);
+
+    // printf("Window %d texture id: %d\n", i, w.texture->id);
+    w->model->transform = LookAtTarget(MatrixTranslate(pos.x, pos.y, pos.z), camera.position);
+
+    w->visible = true;
+    return w;
+}
+
+GameState *GameInit() {
     // Tell the window to use vsync and work on high DPI displays
     SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
 
     // Create the window and OpenGL context
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "3dwm");
 
-    Camera3D camera = {0};
-    camera.up = (Vector3){0.0f, 1.0f, 0.0f}; // Camera up vector (rotation towards target)
-    camera.fovy = 45.0f;                     // Camera field-of-view Y
-    camera.projection = CAMERA_PERSPECTIVE;  // Camera projection type
+    GameState *game = (GameState *)malloc(sizeof(GameState));
+    if (game == NULL) {
+        fprintf(stderr, "Failed to allocate memory for game state\n");
+        return NULL;
+    }
+    memset(game, 0, sizeof(GameState));
 
-    camera.position = (Vector3){0, 2, 8};
-    camera.target = (Vector3){0, 0, -3};
+    game->camera.up = (Vector3){0.0f, 1.0f, 0.0f}; // Camera up vector (rotation towards target)
+    game->camera.fovy = 45.0f;                     // Camera field-of-view Y
+    game->camera.projection = CAMERA_PERSPECTIVE;  // Camera projection type
+
+    game->camera.position = (Vector3){0, 2, 8};
+    game->camera.target = (Vector3){0, 0, -3};
 
     SetTargetFPS(60);
 
-    Display *display = XOpenDisplay(NULL);
-    if (display == NULL) {
+    game->display = XOpenDisplay(NULL);
+    if (game->display == NULL) {
         fprintf(stderr, "Unable to open X display\n");
-        return 1;
+        return NULL;
     }
 
-    MyWindow windows[WIN_COUNT] = {0};
-    windows[0].window = 0x1e0002c;
-    windows[1].window = 0x2a00003;
+    MyWindow *w1 = WindowInit(game->display, game->camera, 0x1e0002c, (Vector3){0.0f, 3.25f, -0.8f});
+    da_append(&game->windows, *w1);
 
-    for (int i = 0; i < WIN_COUNT; i++) {
-        MyWindow *w = &windows[i];
-        w->attr = (XWindowAttributes *)malloc(sizeof(XWindowAttributes));
-        if (XGetWindowAttributes(display, w->window, w->attr) == 0) {
-            fprintf(stderr, "Unable to get window attributes\n");
-            XCloseDisplay(display);
-            return 1;
-        }
+    MyWindow *w2 = WindowInit(game->display, game->camera, 0x2a00003, (Vector3){2.0f, 2.25f, -1.0f});
+    da_append(&game->windows, *w2);
 
-        // Create a simple plane mesh
-        Mesh plane = GenMeshPlane(w->attr->width / 350.0f, w->attr->height / 350.0f, 1, 1); // Width, length, resX, resZ
-        // Mesh cube = GenMeshCube(4.0f, 3.0f, 0.1f); // Width, height, depth
-
-        w->model = (Model *)malloc(sizeof(Model));
-        *w->model = LoadModelFromMesh(plane);
-
-        // Set the model's material to use the texture
-        w->texture = (Texture *)malloc(sizeof(Texture));
-
-        XImage *image = XGetRGBImage(display, w->window, 0, 0, w->attr->width, w->attr->height);
-        MySetTexture(image, w->texture);
-        w->model->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = *w->texture;
-        // XDestroyImage(image);
-
-        // printf("Window %d texture id: %d\n", i, w.texture->id);
-
-        w->visible = true;
-    }
-
-    windows[0].model->transform = LookAtTarget(MatrixTranslate(0, 3.25f, -0.8), camera.position);
-    windows[1].model->transform = LookAtTarget(MatrixTranslate(2, 2.25f, -1), camera.position);
-
-    MyWindow *selected_window = &windows[0];
-    ControlMode mode = CursorMovement;
+    game->selected_window = &game->windows.items[0];
+    game->mode = CursorMovement;
 
     // disable the escape key
     SetExitKey(-1);
 
-    Ray ray = {0};
-    RayCollision collision = { 0 };
-    Vector2 originalMousePosition = {0};
-    Matrix originalTransform = {0};
+    return game;
+}
 
-    float rotationAngle = 0.0f;
-    Vector3 nextNormal = {0};
+int main(void) {
+    GameState *game = GameInit();
+    if (game == NULL) {
+        printf("Failed to initialize game\n");
+        return 1;
+    }
 
     // game loop
     while (!WindowShouldClose()) {
-        if (mode == CameraMovement) {
-            MyUpdateCamera(&camera);
-            if (IsKeyPressed(KEY_Q) || IsKeyPressed(KEY_SPACE) || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                mode = CursorMovement;
-                EnableCursor();
-            }
-            else if (IsKeyPressed(KEY_H)) {
-                for (int i = 0; i < WIN_COUNT; i++) {
-                    windows[i].visible = !windows[i].visible;
-                }
-            }
-            else {
-        // if (IsKeyPressed(KEY_TAB)) {
-            for (int i = 0; i < WIN_COUNT; i++) {
-                MyWindow *w = &windows[i];
-                w->model->transform = LookAtTarget(w->model->transform, camera.position);
-            }
-        // }
-            }
-        }
-        else if (mode == CursorMovement) {
-            if (IsKeyPressed(KEY_SPACE)) {
-                mode = CameraMovement;
-                DisableCursor();
-            }
-            else if (IsKeyPressed(KEY_H)) {
-                for (int i = 0; i < WIN_COUNT; i++) {
-                    windows[i].visible = !windows[i].visible;
-                }
-            }
-            else if (selected_window != NULL && IsKeyPressed(KEY_S)) {
-                mode = ScaleWindow;
-                originalTransform = selected_window->model->transform;
-            }
-            else if (selected_window != NULL && IsKeyPressed(KEY_Z)) {
-                mode = MoveWindowZ;
-                originalTransform = selected_window->model->transform;
-                // camera.target = selected_window->position;
-                originalMousePosition = GetMousePosition();
-            }
-            else if (selected_window != NULL && IsKeyPressed(KEY_G)) {
-                mode = MoveWindowXY;
-                originalTransform = selected_window->model->transform;
-                originalMousePosition = GetMousePosition();
-            }
-            else {//if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                ray = GetScreenToWorldRay(GetMousePosition(), camera);
-
-                collision.distance = 1000000.0f;
-                collision.hit = false;
-                RayCollision tempCollision = {0};
-                // Check collision between ray and box
-                for (int i = 0; i < WIN_COUNT; i++) {
-                    MyWindow *w = &windows[i];
-                    tempCollision = GetRayCollisionMesh(ray, w->model->meshes[0], w->model->transform);
-                    if (tempCollision.hit && tempCollision.distance <= collision.distance) {
-                        collision = tempCollision;
-                        selected_window = w;
-                    }
-                }
-            }
-        }
-        else if (mode == ScaleWindow) {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                mode = CursorMovement;
-            }
-            else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
-                mode = CursorMovement;
-                selected_window->model->transform = originalTransform;
-            }
-            else {
-                //TODO: maybe scale based on mouse velocity instead
-                //      maybe wrap around the screen
-
-                // scale based on mouse position distance from the center of the screen
-                // the closer to the center, the smaller the scale
-                // the further from the center, the larger the scale
-                // should scale quadratically
-
-                Vector2 mousePosition = GetMousePosition();
-                Vector2 screenCenter = {GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f};
-                Vector2 mouseDelta = {mousePosition.x - screenCenter.x, mousePosition.y - screenCenter.y};
-                float scale = Vector2Length(mouseDelta) / (GetScreenWidth() / 2.0f);
-                scale *= 5*scale; // scale quadratically
-                if (scale < 0.03f) scale = 0.03f; // minimum scale
-                if (scale > 10.0f) scale = 10.0f; // maximum scale
-                Matrix scaleMat = MatrixScale(scale, scale, scale);
-                selected_window->model->transform = MatrixMultiply(scaleMat, originalTransform);
-            }
-        }
-        else if (mode == MoveWindowZ) {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                mode = CursorMovement;
-            }
-            else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
-                mode = CursorMovement;
-                selected_window->model->transform = originalTransform;
-            }
-            else {
-                // move window toward the camera when mouse is above center
-                // move window away from the camera when mouse is below center
-
-                Vector3 pos = {originalTransform.m12, originalTransform.m13, originalTransform.m14};
-                Vector3 moveDirection = Vector3Subtract(pos, camera.position);
-                float scalar = (originalMousePosition.y - GetMouseY()) / 60.0f;
-                Vector3 moveVector = Vector3Scale(moveDirection, scalar);
-
-                Matrix m = MatrixTranslate(moveVector.x, moveVector.y, moveVector.z);
-                selected_window->model->transform = MatrixMultiply(originalTransform, m);
-            }
-        }
-        else if (mode == MoveWindowXY) {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                mode = CursorMovement;
-            }
-            else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_CAPS_LOCK)) {
-                mode = CursorMovement;
-                selected_window->model->transform = originalTransform;
-            }
-            else {
-                Vector2 mousePosition = GetMousePosition();
-                Vector3 pos = {originalTransform.m12, originalTransform.m13, originalTransform.m14};
-                Vector3 directionOfWindow = Vector3Subtract(pos, camera.position);
-
-                Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
-                Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
-
-                Vector3 moveDirectionX = Vector3RotateByAxisAngle(directionOfWindow, camera.up, (originalMousePosition.x - mousePosition.x) / 800.0f);
-                Vector3 moveDirection = Vector3RotateByAxisAngle(moveDirectionX, right, (originalMousePosition.y - mousePosition.y) / 800.0f);
-
-                Vector3 moveVector = Vector3Subtract(moveDirection, directionOfWindow);
-
-                Matrix m = MatrixTranslate(pos.x + moveVector.x, pos.y + moveVector.y, pos.z + moveVector.z);
-                selected_window->model->transform = LookAtTarget(m, camera.position);
-            }
-        }
-
-        if (selected_window != NULL) {
-            MyWindow w = *selected_window;
-            XImage *image = XGetRGBImage(display, w.window, 0, 0, w.attr->width, w.attr->height);
-            MyUpdateTexture(image, w.texture);
-            XDestroyImage(image);
-        }
+        GameUpdate(game);
 
         BeginDrawing();
 
         ClearBackground(RAYWHITE);
 
-        BeginMode3D(camera);
+        BeginMode3D(game->camera);
 
         DrawGrid(10, 1.0f);
 
         // draw collision box
-        if (collision.hit) {
-            DrawCube(collision.point, 0.1f, 0.1f, 0.1f, RED);
+        if (game->collision.hit) {
+            DrawCube(game->collision.point, 0.1f, 0.1f, 0.1f, RED);
         }
-        DrawRay(ray, GREEN);
+        DrawRay(game->ray, GREEN);
 
-        for (int i = 0; i < WIN_COUNT; i++) {
-            MyWindow *w = &windows[i];
+        FOR_EACH_WINDOW(w, game->windows) {
             if (!w->visible) break;
             DrawModel(*w->model, ORIGIN, 1.0f, WHITE);
 
-            Color color = selected_window != NULL && selected_window->window == w->window ? RED : BLACK;
+            Color color = game->selected_window != NULL && game->selected_window->window == w->window ? RED : BLACK;
             DrawWindowBorder(w, color);
 
-            if (selected_window->window == w->window)
+            if (game->selected_window->window == w->window)
                 DrawWindowNormal(w, GREEN);
         }
 
@@ -502,8 +594,8 @@ int main(void) {
         DrawRectangle(10, 10, 200, 50, Fade(SKYBLUE, 0.5f));
         DrawRectangleLines(10, 10, 200, 50, BLUE);
 
-        const char *modeText = GetModeText(mode);
-        Color modeColor = GetModeColor(mode);
+        const char *modeText = GetModeText(game->mode);
+        Color modeColor = GetModeColor(game->mode);
 
         DrawText(TextFormat("Mode: %s", modeText), 2, 0, 10, modeColor);
         DrawText("- Press [Space] to change modes", 20, 20, 10, DARKGRAY);
@@ -514,12 +606,11 @@ int main(void) {
     }
 
     // cleanup
-    for (int i = 0; i < WIN_COUNT; i++) {
-        MyWindow *w = &windows[i];
+    FOR_EACH_WINDOW(w, game->windows) {
         UnloadModel(*w->model);
         XFree(w->attr);
     }
-    XCloseDisplay(display);
+    XCloseDisplay(game->display);
     CloseWindow();
     return 0;
 }
