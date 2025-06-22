@@ -402,3 +402,7 @@ Makefile
 /*.sln
 
 ppms
+
+Notes.md
+temp.txt
+*.vim
