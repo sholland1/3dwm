@@ -3,7 +3,8 @@
 3dwm is an attempt to create virtual desktop window manager in similar vein to [dwm](https://dwm.suckless.org/)
 
 Currently windows are hard coded and can't be interacted with from within the 3d environment.
-I haven't been able to get raylib to allow to allow creating windows or passing through key presses.
+I use xwininfo to get the window id hex value.
+I haven't been able to get raylib to allow creating windows or passing through key presses.
 I think I am going to rewrite this as an X11 program and use a library like SDL or OpenGL.
 
 ## Features
@@ -11,6 +12,8 @@ I think I am going to rewrite this as an X11 program and use a library like SDL 
 - Manually Resizing and Moving windows
 - Hiding windows
 - Windows always face camera
+
+https://github.com/user-attachments/assets/320dff37-1558-464f-92a4-efc0a87937fe
 
 ## Project Overview
 
