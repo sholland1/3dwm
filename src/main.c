@@ -108,6 +108,7 @@ typedef struct {
     MyWindow *selected_window;
     Matrix original_transform;
     Vector2 original_mouse_position;
+    bool show_controls;
 
     Ray ray;
     RayCollision collision;
@@ -466,6 +467,10 @@ void WMUpdate(WMState *wm) {
     if (wm->selected_window != NULL) {
         MyUpdateTexture(wm->display, wm->selected_window);
     }
+
+    if (IsKeyPressed(KEY_F1)) {
+        wm->show_controls = !wm->show_controls;
+    }
 }
 
 MyWindow *WindowInit(Display *display, Camera camera, Window id, Vector3 pos) {
@@ -528,6 +533,7 @@ WMState *WMInit() {
     wm->camera.target = (Vector3){0, 0, -3};
 
     SetTargetFPS(60);
+    wm->show_controls = true;
 
     wm->display = XOpenDisplay(NULL);
     if (wm->display == NULL) {
@@ -548,6 +554,43 @@ WMState *WMInit() {
     SetExitKey(-1);
 
     return wm;
+}
+
+void DrawModeText(WMState *wm) {
+    const char *modeText = GetModeText(wm->mode);
+    Color modeColor = GetModeColor(wm->mode);
+    const int FONTSIZE = 10;
+    DrawText(TextFormat("Mode: %s", modeText), 5, 0, FONTSIZE, modeColor);
+}
+
+void DrawControls(WMState *wm) {
+    if (!wm->show_controls) return;
+
+    const char* controlsText[] = {
+        "- Press [Space] to toggle cursor/camera movement",
+        "- Use [F1] to toggle controls display",
+        "Mode: Cursor Movement",
+        "- Press H to toggle visibility of all windows",
+        "- Press S to scale selected window",
+        "- Press Z to move selected window in the Z direction",
+        "- Press G to move selected window in the XY plane",
+        "- Left-click to confirm change",
+        "- Press [Escape] to cancel change",
+        "Mode: Camera Movement",
+        "- Use WASD to move",
+        "- Use [F3/F4] to move up/down",
+    };
+
+    const int ROW_HEIGHT = 20;
+    const int ROW_COUNT = sizeof(controlsText) / sizeof(controlsText[0]);
+    DrawRectangle(10, 10, 285, ROW_COUNT * ROW_HEIGHT + 10, Fade(SKYBLUE, 0.5f));
+    DrawRectangleLines(10, 10, 285, ROW_COUNT * ROW_HEIGHT + 10, BLUE);
+
+    const int FONTSIZE = 10;
+    const int INDENTX = 20;
+    for (int i = 0; i < ROW_COUNT; i++) {
+        DrawText(controlsText[i], INDENTX, (i+1) * ROW_HEIGHT, FONTSIZE, DARKGRAY);
+    }
 }
 
 int main(void) {
@@ -592,15 +635,8 @@ int main(void) {
         int screenWidth = GetScreenWidth();
         DrawFPS(screenWidth - 80, 10);
 
-        DrawRectangle(10, 10, 200, 50, Fade(SKYBLUE, 0.5f));
-        DrawRectangleLines(10, 10, 200, 50, BLUE);
-
-        const char *modeText = GetModeText(wm->mode);
-        Color modeColor = GetModeColor(wm->mode);
-
-        DrawText(TextFormat("Mode: %s", modeText), 2, 0, 10, modeColor);
-        DrawText("- Press [Space] to change modes", 20, 20, 10, DARKGRAY);
-        DrawText("- Press [Escape] to exit", 20, 40, 10, DARKGRAY);
+        DrawModeText(wm);
+        DrawControls(wm);
 
         // end the frame and get ready for the next one  (display frame, poll input, etc...)
         EndDrawing();
