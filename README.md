@@ -10,6 +10,7 @@ I think I am going to rewrite this as an X11 program and use a library like SDL 
 - Moving the camera
 - Manually Resizing and Moving windows
 - Hiding windows
+- Windows always face camera
 
 ## Project Overview
 
